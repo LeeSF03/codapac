@@ -9,9 +9,6 @@ const nextConfig: NextConfig = {
     },
   },
 
-  // Allow ngrok and any external host for mobile testing
-  allowedDevOrigins: ["*.ngrok-free.app", "*.ngrok.io"],
-
   reactCompiler: true,
   typedRoutes: true,
   logging: {
