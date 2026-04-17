@@ -1,6 +1,6 @@
 import Link from "next/link"
 
-export function SignInHeader() {
+export function AuthHeader() {
   return (
     <header className="shrink-0 bg-neutral-950 text-white">
       <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between px-6 py-3">

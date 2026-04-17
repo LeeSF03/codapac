@@ -1,13 +1,13 @@
-import { SignInHeader } from "./_components/sign-in-header"
+import { AuthHeader } from "./_components/auth-header"
 
-export default function SignInLayout({
+export default function AuthLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
   return (
     <div className="bg-background flex h-dvh flex-col overflow-hidden">
-      <SignInHeader />
+      <AuthHeader />
       {children}
     </div>
   )

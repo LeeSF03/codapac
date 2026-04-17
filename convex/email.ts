@@ -2,7 +2,8 @@
 
 import { v } from "convex/values"
 
-import { sendOtpEmail } from "@/lib/email"
+import { sendOtpEmail } from "@/lib/email-server"
+
 import { internalAction } from "./_generated/server"
 
 export const sendOtpEmailAction = internalAction({

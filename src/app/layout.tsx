@@ -1,6 +1,8 @@
 import type { Metadata } from "next"
 import { IBM_Plex_Mono, Lora, Plus_Jakarta_Sans } from "next/font/google"
 
+import { NuqsAdapter } from "nuqs/adapters/next/app"
+
 import { ConvexClientProvider } from "@/provider/ConvexClientProvider"
 
 import "./globals.css"
@@ -37,7 +39,9 @@ export default function RootLayout({
       className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+        <NuqsAdapter>
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </NuqsAdapter>
       </body>
     </html>
   )
