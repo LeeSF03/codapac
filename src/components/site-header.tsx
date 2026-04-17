@@ -6,10 +6,11 @@ import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-type NavItem = { label: string; href: "/" | "/agents" }
+type NavItem = { label: string; href: "/" | "/dashboard" | "/agents" }
 
 const NAV: NavItem[] = [
-  { label: "Board", href: "/" },
+  { label: "Home", href: "/" },
+  { label: "Dashboard", href: "/dashboard" },
   { label: "Agents", href: "/agents" },
 ]
 
