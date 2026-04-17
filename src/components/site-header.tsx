@@ -43,7 +43,33 @@ export function SiteHeader() {
           </span>
         </Link>
 
-        <div className="flex-1" />
+          {variant === "app" && (
+            <nav className="hidden items-center gap-1 md:flex">
+              {NAV.map((item) => {
+                const active =
+                  item.href === "/"
+                    ? pathname === "/"
+                    : item.href === "/dashboard"
+                      ? pathname.startsWith("/dashboard") || pathname.startsWith("/issues")
+                      : pathname.startsWith(item.href)
+                return (
+                  <Button
+                    key={item.href}
+                    asChild
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                      "text-white/80 hover:bg-white/10 hover:text-white",
+                      active && "bg-white/10 text-white hover:bg-white/20",
+                    )}
+                  >
+                    <Link href={item.href}>{item.label}</Link>
+                  </Button>
+                )
+              })}
+            </nav>
+          )}
+        </div>
 
         <div className="flex shrink-0 items-center gap-2">
           {signedIn ? (
