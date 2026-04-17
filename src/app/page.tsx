@@ -1,6 +1,8 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useEffect } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
 import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
@@ -8,6 +10,8 @@ import { LiveAgentChat } from "@/components/live-agent-chat"
 import { Reveal } from "@/components/reveal"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
+import { authClient } from "@/lib/auth-client"
+import { useFakeSession } from "@/lib/fake-auth"
 
 type Phase = {
   key: "listen" | "plan" | "fix" | "check"
@@ -158,6 +162,15 @@ const FRIENDLY_BLURBS: Record<AgentKey, { role: string; blurb: string }> = {
 }
 
 export default function Home() {
+  const router = useRouter()
+  const { data: session, isPending } = authClient.useSession()
+  const fake = useFakeSession()
+  const signedIn = (!isPending && !!session) || !!fake
+
+  useEffect(() => {
+    if (signedIn) router.replace("/dashboard")
+  }, [signedIn, router])
+
   return (
     <div className="min-h-dvh bg-background">
       <div className="sticky top-0 z-20">
