@@ -1,6 +1,6 @@
-import { type Config } from "prettier"
+import type { Config } from "prettier"
 
-const config: Config = {
+const config = {
   printWidth: 80,
   trailingComma: "es5",
   tabWidth: 2,
@@ -26,6 +26,6 @@ const config: Config = {
   ],
   importOrderSeparation: true,
   importOrderSortSpecifiers: true,
-}
+} satisfies Config
 
 export default config
