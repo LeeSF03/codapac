@@ -38,10 +38,8 @@ export function SiteHeader({
               {NAV.map((item) => {
                 const active =
                   item.href === "/"
-                    ? pathname === "/"
-                    : item.href === "/dashboard"
-                      ? pathname.startsWith("/dashboard") || pathname.startsWith("/issues")
-                      : pathname.startsWith(item.href)
+                    ? pathname === "/" || pathname.startsWith("/issues")
+                    : pathname.startsWith(item.href)
                 return (
                   <Button
                     key={item.href}
