@@ -173,13 +173,4 @@
   body {
     @apply bg-background text-foreground;
   }
-<<<<<<< Updated upstream
-  html {
-    @apply font-sans;
-    /* Prevent pull-to-refresh in mobile Safari */
-    overscroll-behavior-y: contain;
-  }
 }
-=======
-}
->>>>>>> Stashed changes
