@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
 import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
@@ -8,6 +9,8 @@ import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { authClient } from "@/lib/auth-client"
+import { useFakeSession } from "@/lib/fake-auth"
 
 const activity: Record<AgentKey, { time: string; text: string }[]> = {
   priya: [
@@ -49,6 +52,15 @@ const stats: Record<AgentKey, { k: string; v: string }[]> = {
 }
 
 export default function AgentsPage() {
+  const router = useRouter()
+  const { data: session, isPending } = authClient.useSession()
+  const fake = useFakeSession()
+  const signedIn = (!isPending && !!session) || !!fake
+
+  useEffect(() => {
+    if (signedIn) router.replace("/dashboard")
+  }, [signedIn, router])
+
   const [focus, setFocus] = useState<AgentKey>("priya")
 
   return (
