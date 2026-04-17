@@ -6,10 +6,11 @@ import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-type NavItem = { label: string; href: "/" | "/agents" }
+type NavItem = { label: string; href: "/" | "/dashboard" | "/agents" }
 
 const NAV: NavItem[] = [
-  { label: "Board", href: "/" },
+  { label: "Home", href: "/" },
+  { label: "Dashboard", href: "/dashboard" },
   { label: "Agents", href: "/agents" },
 ]
 
@@ -37,8 +38,10 @@ export function SiteHeader({
               {NAV.map((item) => {
                 const active =
                   item.href === "/"
-                    ? pathname === "/" || pathname.startsWith("/issues")
-                    : pathname.startsWith(item.href)
+                    ? pathname === "/"
+                    : item.href === "/dashboard"
+                      ? pathname.startsWith("/dashboard") || pathname.startsWith("/issues")
+                      : pathname.startsWith(item.href)
                 return (
                   <Button
                     key={item.href}
