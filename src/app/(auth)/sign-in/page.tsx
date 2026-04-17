@@ -1,7 +1,17 @@
+import { redirect } from "next/navigation"
+
+import { getCurrentAuthUser, hasUsername } from "@/lib/auth-server"
+
 import { SignInCard } from "./_components/sign-in-card"
 import { SignInPreview } from "./_components/sign-in-preview"
 
-export default function SignInPage() {
+export default async function SignInPage() {
+  const user = await getCurrentAuthUser()
+
+  if (user) {
+    redirect(hasUsername(user) ? "/" : "/sign-in/username")
+  }
+
   return (
     <main className="mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1 items-center gap-8 overflow-hidden px-6 py-6 lg:grid-cols-[1.2fr_1fr] lg:gap-12">
       <SignInPreview />

@@ -1,10 +1,8 @@
-import { Google } from "@thesvg/react"
-
-import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 
 import { EmailOtpForm } from "./email-otp-form"
+import { GoogleSignInButton } from "./google-sign-in-button"
 
 export function SignInCard() {
   return (
@@ -17,14 +15,7 @@ export function SignInCard() {
       </p>
 
       <div className="mt-5 grid gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          className="h-10 justify-center gap-2 font-medium"
-        >
-          <Google />
-          Continue with Google
-        </Button>
+        <GoogleSignInButton />
       </div>
 
       <div className="my-4 flex items-center gap-3">

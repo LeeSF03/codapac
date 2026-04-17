@@ -2,7 +2,7 @@ import { z } from "zod"
 
 export const USERNAME_MIN_LENGTH = 3
 export const USERNAME_MAX_LENGTH = 20
-export const USERNAME_PATTERN = /^[a-z0-9_]+$/
+export const USERNAME_PATTERN = /^[a-zA-Z0-9_]+$/
 
 export const usernameSchema = z.object({
   username: z
@@ -22,7 +22,3 @@ export const usernameSchema = z.object({
 })
 
 export type UsernameFormValues = z.infer<typeof usernameSchema>
-
-export function normalizeUsername(value: string) {
-  return value.toLowerCase().replace(/\s+/g, "")
-}

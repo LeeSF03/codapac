@@ -1,9 +1,5 @@
 import { defineSchema } from "convex/server"
 
-import { tables as authTables } from "./betterAuth/schema"
-
-const schema = defineSchema({
-  ...authTables,
-})
+const schema = defineSchema({})
 
 export default schema

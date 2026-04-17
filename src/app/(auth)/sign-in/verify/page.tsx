@@ -1,15 +1,21 @@
-import { Suspense } from "react"
+import { redirect } from "next/navigation"
+
+import { getCurrentAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { SignInSteps } from "../_components/sign-in-steps"
 import { VerifyCard } from "./_components/verify-card"
 
-export default function VerifyPage() {
+export default async function VerifyPage() {
+  const user = await getCurrentAuthUser()
+
+  if (user) {
+    redirect(hasUsername(user) ? "/" : "/sign-in/username")
+  }
+
   return (
     <main className="flex flex-1 flex-col items-center justify-center overflow-hidden px-6 py-6">
       <SignInSteps current="verify" />
-      <Suspense fallback={null}>
-        <VerifyCard />
-      </Suspense>
+      <VerifyCard />
     </main>
   )
 }

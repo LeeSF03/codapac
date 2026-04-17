@@ -4,6 +4,7 @@ import { isActionCtx } from "@convex-dev/better-auth/utils"
 import { BetterAuthOptions } from "better-auth"
 import { betterAuth } from "better-auth/minimal"
 import { emailOTP } from "better-auth/plugins/email-otp"
+import { username } from "better-auth/plugins/username"
 
 import { components, internal } from "../_generated/api"
 import { DataModel } from "../_generated/dataModel"
@@ -14,6 +15,19 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
+
+const minUsernameLength = 3
+const maxUsernameLength = 20
+const usernameNormalization = false
+const usernamePattern = /^[a-z0-9_]+$/
+const reservedUsernames = new Set([
+  "admin",
+  "api",
+  "codapac",
+  "help",
+  "root",
+  "support",
+])
 
 // The component client has methods needed for integrating Convex with Better Auth,
 // as well as helper methods for general use.
@@ -28,6 +42,7 @@ export const authComponent = createClient<DataModel, typeof schema>(
 
 export const createAuthOptions = (ctx: GenericCtx<DataModel>) =>
   ({
+    baseURL: process.env.SITE_URL,
     trustedOrigins: [siteUrl],
     database: authComponent.adapter(ctx),
     emailAndPassword: {
@@ -37,6 +52,13 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>) =>
       google: {
         clientId: googleClientId!,
         clientSecret: googleClientSecret!,
+        mapProfileToUser(profile) {
+          const username = profile.name
+          return {
+            displayUsername: username,
+            username,
+          }
+        },
         redirectURI: `${siteUrl}/api/auth/callback/google`,
       },
     },
@@ -52,6 +74,17 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>) =>
             otp,
             type,
           })
+        },
+      }),
+      username({
+        maxUsernameLength,
+        minUsernameLength,
+        usernameNormalization,
+        usernameValidator: (value) => {
+          const username = value.toLowerCase()
+          return (
+            usernamePattern.test(username) && !reservedUsernames.has(username)
+          )
         },
       }),
       convex({ authConfig }),

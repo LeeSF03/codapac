@@ -1,11 +1,14 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useTransition } from "react"
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 
+import { zodResolver } from "@hookform/resolvers/zod"
 import { ArrowLeft } from "lucide-react"
+import { Controller, useForm } from "react-hook-form"
+import { z } from "zod"
 
 import { Cooldown } from "@/components/cooldown"
 import { Button } from "@/components/ui/button"
@@ -16,91 +19,120 @@ import {
   InputOTPSlot,
 } from "@/components/ui/input-otp"
 
+import { authClient } from "@/lib/auth-client"
+
 import { VerifyStatusMessage } from "./verify-status-message"
 
 const CODE_LENGTH = 6
 const RESEND_COOLDOWN_SECONDS = 30
+const verifyOtpSchema = z.object({
+  code: z
+    .string()
+    .length(CODE_LENGTH, `Enter the ${CODE_LENGTH}-digit code.`)
+    .regex(/^\d+$/, "Enter the 6-digit code."),
+})
 
-export function VerifyOtpForm() {
+type VerifyOtpFormProps = {
+  email: string
+}
+
+export function VerifyOtpForm({ email }: VerifyOtpFormProps) {
   const router = useRouter()
-  const [code, setCode] = useState("")
-  const [verifying, setVerifying] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submittedRef = useRef(false)
-  const verificationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  )
+  const [verifying, startVerifyingTransition] = useTransition()
+  const [resending, startResendingTransition] = useTransition()
+  const {
+    control,
+    clearErrors,
+    formState: { errors },
+    handleSubmit,
+    resetField,
+    setError,
+  } = useForm<z.infer<typeof verifyOtpSchema>>({
+    resolver: zodResolver(verifyOtpSchema),
+    defaultValues: {
+      code: "",
+    },
+  })
+  const error = errors.code?.message ?? null
 
-  useEffect(() => {
-    return () => {
-      if (verificationTimeoutRef.current) {
-        clearTimeout(verificationTimeoutRef.current)
-      }
+  const requestCode = async () => {
+    const result = await authClient.emailOtp.sendVerificationOtp({
+      email,
+      type: "sign-in",
+    })
+
+    if (result.error) {
+      setError("code", {
+        message:
+          result.error.message ?? "We couldn't send the code. Try again.",
+      })
     }
-  }, [])
 
-  const clearPendingVerification = () => {
-    if (verificationTimeoutRef.current) {
-      clearTimeout(verificationTimeoutRef.current)
-      verificationTimeoutRef.current = null
-    }
-
-    submittedRef.current = false
+    return Boolean(result.data?.success)
   }
 
-  const resetCode = () => {
-    clearPendingVerification()
-    setCode("")
-    setError(null)
-    setVerifying(false)
-  }
+  const verifyCode = ({ code }: z.infer<typeof verifyOtpSchema>) => {
+    startVerifyingTransition(async () => {
+      resetField("code")
+      clearErrors("code")
 
-  const handleCodeChange = (value: string) => {
-    setCode(value)
-    if (error) setError(null)
-    if (value.length !== CODE_LENGTH || submittedRef.current) return
+      const result = await authClient.signIn.emailOtp({
+        email,
+        name: email.split("@")[0] ?? "",
+        otp: code,
+      })
 
-    submittedRef.current = true
-    setVerifying(true)
-    setError(null)
-    verificationTimeoutRef.current = setTimeout(() => {
-      // UI stub - replace with real verify call
-      if (value === "000000") {
-        setError("That code didn't match. Try again or resend.")
-        setVerifying(false)
-        setCode("")
-        submittedRef.current = false
-        verificationTimeoutRef.current = null
+      if (result.error) {
+        setError("code", {
+          message:
+            result.error.message ?? "We couldn't verify that code. Try again.",
+        })
+        resetField("code", { defaultValue: "", keepError: true })
         return
       }
 
-      router.push("/sign-in/username")
-    }, 700)
+      const session = await authClient.getSession()
+      const username = session.data?.user.username
+
+      router.replace(username ? "/" : "/sign-in/username")
+    })
   }
 
   return (
     <div className="grid gap-3">
       <div className="flex justify-center py-2">
-        <InputOTP
-          maxLength={CODE_LENGTH}
-          value={code}
-          onChange={handleCodeChange}
-          disabled={verifying}
-          aria-invalid={Boolean(error)}
-          autoFocus
-        >
-          <InputOTPGroup>
-            <InputOTPSlot index={0} className="size-12 text-base" />
-            <InputOTPSlot index={1} className="size-12 text-base" />
-            <InputOTPSlot index={2} className="size-12 text-base" />
-          </InputOTPGroup>
-          <InputOTPSeparator />
-          <InputOTPGroup>
-            <InputOTPSlot index={3} className="size-12 text-base" />
-            <InputOTPSlot index={4} className="size-12 text-base" />
-            <InputOTPSlot index={5} className="size-12 text-base" />
-          </InputOTPGroup>
-        </InputOTP>
+        <Controller
+          control={control}
+          name="code"
+          render={({ field }) => (
+            <InputOTP
+              maxLength={CODE_LENGTH}
+              value={field.value}
+              onChange={(value) => {
+                field.onChange(value)
+                clearErrors("code")
+                if (value.length === CODE_LENGTH && !verifying) {
+                  void handleSubmit(verifyCode)()
+                }
+              }}
+              disabled={verifying}
+              aria-invalid={Boolean(error)}
+              autoFocus
+            >
+              <InputOTPGroup>
+                <InputOTPSlot index={0} className="size-12 text-base" />
+                <InputOTPSlot index={1} className="size-12 text-base" />
+                <InputOTPSlot index={2} className="size-12 text-base" />
+              </InputOTPGroup>
+              <InputOTPSeparator />
+              <InputOTPGroup>
+                <InputOTPSlot index={3} className="size-12 text-base" />
+                <InputOTPSlot index={4} className="size-12 text-base" />
+                <InputOTPSlot index={5} className="size-12 text-base" />
+              </InputOTPGroup>
+            </InputOTP>
+          )}
+        />
       </div>
 
       <VerifyStatusMessage error={error} verifying={verifying} />
@@ -123,13 +155,19 @@ export function VerifyOtpForm() {
             <button
               type="button"
               onClick={() => {
-                resetCode()
-                startCooldown()
+                startResendingTransition(async () => {
+                  const sent = await requestCode()
+                  if (sent) startCooldown()
+                })
               }}
-              disabled={isCoolingDown}
+              disabled={isCoolingDown || resending || verifying}
               className="text-primary disabled:text-muted-foreground font-medium underline-offset-4 hover:underline disabled:no-underline"
             >
-              {isCoolingDown ? `Resend in ${remainingSeconds}s` : "Resend code"}
+              {resending
+                ? "Sending..."
+                : isCoolingDown
+                  ? `Resend in ${remainingSeconds}s`
+                  : "Resend code"}
             </button>
           )}
         </Cooldown>

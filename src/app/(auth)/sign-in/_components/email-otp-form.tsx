@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
+import { authClient } from "@/lib/auth-client"
+
 const emailOtpSchema = z.object({
   email: z.email("Enter a valid email address.").trim(),
 })
@@ -21,6 +23,7 @@ export function EmailOtpForm() {
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting, isValid },
   } = useForm<EmailOtpFormValues>({
     resolver: zodResolver(emailOtpSchema),
@@ -31,8 +34,19 @@ export function EmailOtpForm() {
   })
 
   const onSubmit = async ({ email }: EmailOtpFormValues) => {
-    const params = new URLSearchParams({ email })
+    const result = await authClient.emailOtp.sendVerificationOtp({
+      email: email,
+      type: "sign-in",
+    })
 
+    if (result.error) {
+      setError("root", {
+        message: result.error.message ?? "We could not send a code. Try again.",
+      })
+      return
+    }
+
+    const params = new URLSearchParams({ email })
     router.push(`/sign-in/verify?${params.toString()}`)
   }
 
@@ -56,6 +70,10 @@ export function EmailOtpForm() {
           </p>
         ) : null}
       </div>
+
+      {errors.root ? (
+        <p className="text-destructive text-xs">{errors.root.message}</p>
+      ) : null}
 
       <Button
         type="submit"

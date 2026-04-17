@@ -1,26 +1,22 @@
 "use client"
 
-import { useMemo } from "react"
-
 import { useRouter } from "next/navigation"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Controller, useForm, useWatch } from "react-hook-form"
+import { Controller, Watch, useForm } from "react-hook-form"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
+import { authClient } from "@/lib/auth-client"
+
 import { UsernameRule } from "./username-rule"
-import { getUsernameStatus } from "./username-status"
-import { UsernameStatusIcon } from "./username-status-icon"
-import { UsernameStatusLine } from "./username-status-line"
 import {
   USERNAME_MAX_LENGTH,
   USERNAME_MIN_LENGTH,
   USERNAME_PATTERN,
   type UsernameFormValues,
-  normalizeUsername,
   usernameSchema,
 } from "./username-validation"
 
@@ -29,7 +25,8 @@ export function UsernameForm() {
   const {
     control,
     handleSubmit,
-    formState: { errors, isSubmitting, isValid },
+    setError,
+    formState: { isSubmitting, isValid },
   } = useForm<UsernameFormValues>({
     resolver: zodResolver(usernameSchema),
     mode: "onChange",
@@ -37,19 +34,45 @@ export function UsernameForm() {
       username: "",
     },
   })
-  const username = useWatch({ control, name: "username" }) ?? ""
-  const status = useMemo(
-    () =>
-      getUsernameStatus({
-        username,
-        validationMessage: errors.username?.message,
-      }),
-    [errors.username?.message, username]
-  )
-  const canSubmit = status.kind === "available" && isValid && !isSubmitting
+  const canSubmit = isValid && !isSubmitting
 
-  const onSubmit = async () => {
-    router.push("/")
+  const onSubmit = async ({ username }: UsernameFormValues) => {
+    const availabilityResult = await authClient.isUsernameAvailable({
+      username,
+    })
+
+    if (availabilityResult.error) {
+      setError("username", {
+        message:
+          availabilityResult.error.message ??
+          "We could not check that username. Try again.",
+      })
+      return
+    }
+
+    if (!availabilityResult.data?.available) {
+      setError("username", {
+        message: "Username is already taken. Please try another.",
+      })
+      return
+    }
+
+    const updateResult = await authClient.updateUser({
+      displayUsername: username,
+      name: username,
+      username,
+    })
+
+    if (updateResult.error) {
+      setError("username", {
+        message:
+          updateResult.error.message ??
+          "We could not save that username. Try another one.",
+      })
+      return
+    }
+
+    router.replace("/")
   }
 
   return (
@@ -72,45 +95,39 @@ export function UsernameForm() {
                 placeholder="ada"
                 value={field.value}
                 ref={field.ref}
-                onChange={(event) =>
-                  field.onChange(normalizeUsername(event.target.value))
-                }
+                onChange={(event) => field.onChange(event.target.value)}
                 onBlur={field.onBlur}
                 maxLength={USERNAME_MAX_LENGTH}
                 className="h-10 pr-10 pl-7 font-mono text-[13.5px]"
-                aria-invalid={
-                  status.kind === "invalid" || status.kind === "taken"
-                }
                 autoFocus
               />
             )}
           />
-          <span className="absolute top-1/2 right-3 -translate-y-1/2">
-            <UsernameStatusIcon status={status} />
-          </span>
         </div>
-        <UsernameStatusLine
-          status={status}
-          length={username.length}
-          username={username}
-        />
       </div>
 
-      <ul className="text-muted-foreground grid gap-1 text-[12px]">
-        <UsernameRule ok={username.length >= USERNAME_MIN_LENGTH}>
-          At least {USERNAME_MIN_LENGTH} characters
-        </UsernameRule>
-        <UsernameRule
-          ok={username.length <= USERNAME_MAX_LENGTH && username.length > 0}
-        >
-          Up to {USERNAME_MAX_LENGTH} characters
-        </UsernameRule>
-        <UsernameRule
-          ok={username.length === 0 || USERNAME_PATTERN.test(username)}
-        >
-          Lowercase letters, numbers, and underscores only
-        </UsernameRule>
-      </ul>
+      <Watch
+        control={control}
+        name="username"
+        render={(value) => (
+          <ul className="text-muted-foreground grid gap-1 text-[12px]">
+            <UsernameRule ok={value.length >= USERNAME_MIN_LENGTH}>
+              At least {USERNAME_MIN_LENGTH} characters
+            </UsernameRule>
+            <UsernameRule
+              ok={value.length <= USERNAME_MAX_LENGTH && value.length > 0}
+            >
+              Up to {USERNAME_MAX_LENGTH} characters
+            </UsernameRule>
+            <UsernameRule
+              ok={value.length === 0 || USERNAME_PATTERN.test(value)}
+            >
+              Uppercase letters, lowercase letters, numbers, and underscores
+              only
+            </UsernameRule>
+          </ul>
+        )}
+      />
 
       <Button
         type="submit"
