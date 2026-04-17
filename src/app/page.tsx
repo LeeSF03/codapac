@@ -157,7 +157,223 @@ const FRIENDLY_BLURBS: Record<AgentKey, { role: string; blurb: string }> = {
   },
 }
 
-export default function Home() {
+import Link from "next/link"
+
+import { AgentBadge } from "@/components/agent-badge"
+import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
+import { LiveAgentChat } from "@/components/live-agent-chat"
+import { Reveal } from "@/components/reveal"
+import { SiteHeader } from "@/components/site-header"
+import { Button } from "@/components/ui/button"
+
+type Phase = {
+  key: "listen" | "plan" | "fix" | "check"
+  title: string
+  blurb: string
+  agent: AgentKey
+  dot: string
+  text: string
+  ring: string
+}
+
+const PHASES: Phase[] = [
+  {
+    key: "listen",
+    title: "Listen",
+    blurb: "Tell us what's wrong in your own words. We pick out the important bits.",
+    agent: "priya",
+    dot: "bg-amber-500",
+    text: "text-amber-700",
+    ring: "ring-amber-500/30",
+  },
+  {
+    key: "plan",
+    title: "Plan",
+    blurb: "We break it into small, clear pieces so nothing gets forgotten.",
+    agent: "priya",
+    dot: "bg-amber-500",
+    text: "text-amber-700",
+    ring: "ring-amber-500/30",
+  },
+  {
+    key: "fix",
+    title: "Fix",
+    blurb: "A helper rolls up their sleeves and takes care of each piece.",
+    agent: "enzo",
+    dot: "bg-sky-500",
+    text: "text-sky-700",
+    ring: "ring-sky-500/30",
+  },
+  {
+    key: "check",
+    title: "Check",
+    blurb: "Another helper double-checks everything is working before it goes live.",
+    agent: "quinn",
+    dot: "bg-emerald-500",
+    text: "text-emerald-700",
+    ring: "ring-emerald-500/30",
+  },
+]
+
+type MiniCard = {
+  title: string
+  tag: string
+  agent: AgentKey
+  tone: "todo" | "progress" | "done" | "merged"
+}
+
+const MINI_COLUMNS: {
+  key: MiniCard["tone"]
+  title: string
+  hint: string
+  dot: string
+}[] = [
+  { key: "todo", title: "To do", hint: "3 waiting", dot: "bg-amber-500" },
+  { key: "progress", title: "Working on it", hint: "being handled", dot: "bg-sky-500" },
+  { key: "done", title: "Checking", hint: "one last look", dot: "bg-emerald-500" },
+  { key: "merged", title: "All done", hint: "live", dot: "bg-muted-foreground" },
+]
+
+const MINI_CARDS: MiniCard[] = [
+  {
+    title: "Checkout button says the wrong thing",
+    tag: "wording",
+    agent: "priya",
+    tone: "todo",
+  },
+  {
+    title: "Welcome email looks broken on iPhone",
+    tag: "email",
+    agent: "priya",
+    tone: "todo",
+  },
+  {
+    title: "Search doesn't reset when I clear filters",
+    tag: "feels buggy",
+    agent: "enzo",
+    tone: "progress",
+  },
+  {
+    title: "Chart bleeds off the screen on my laptop",
+    tag: "looks off",
+    agent: "quinn",
+    tone: "done",
+  },
+  {
+    title: "Skip button was ignored after switching teams",
+    tag: "onboarding",
+    agent: "quinn",
+    tone: "merged",
+  },
+]
+
+const STATS = [
+  {
+    label: "Average time to fix",
+    value: "54m",
+    hint: "from 'this is annoying' to 'it's fixed'",
+    trend: "text-emerald-600",
+  },
+  {
+    label: "Got it right first time",
+    value: "92%",
+    hint: "of the last 30 fixes",
+    trend: "text-emerald-600",
+  },
+  {
+    label: "Sent back to redo",
+    value: "3",
+    hint: "caught by the checker",
+    trend: "text-muted-foreground",
+  },
+  {
+    label: "Team online",
+    value: "3 / 3",
+    hint: "always ready to help",
+    trend: "text-muted-foreground",
+  },
+]
+
+const AGENT_KEYS: AgentKey[] = ["priya", "enzo", "quinn"]
+
+const FRIENDLY_BLURBS: Record<AgentKey, { role: string; blurb: string }> = {
+  priya: {
+    role: "The organiser",
+    blurb:
+      "Reads what you wrote, figures out what actually needs doing, and writes it down in plain steps.",
+  },
+  enzo: {
+    role: "The fixer",
+    blurb:
+      "Takes each step and does it carefully. Doesn't stop until it feels right.",
+  },
+  quinn: {
+    role: "The checker",
+    blurb:
+      "Tries to break it on purpose. Only gives the green light when everything behaves.",
+  },
+}
+
+import Link from "next/link"
+import { useMemo, useState } from "react"
+
+import { AgentBadge } from "@/components/agent-badge"
+import { AGENTS, AgentKey } from "@/components/agent-orb"
+import { SiteHeader } from "@/components/site-header"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+
+type Role = "PM" | "ENG" | "QA"
+
+const AGENT_BY_ROLE: Record<Role, AgentKey> = {
+  PM: "priya",
+  ENG: "enzo",
+  QA: "quinn",
+}
+
+type Tone = "todo" | "progress" | "done" | "merged"
+
+type CardT = {
+  id: string
+  title: string
+  issue: number
+  agent: Role
+  tags: string[]
+  tone: Tone
+}
+
+const columns: {
+  key: Tone
+  title: string
+  hint: string
+  dot: string
+  ring: string
+}[] = [
+  { key: "todo", title: "To Do", hint: "queued by BOSS", dot: "bg-amber-500", ring: "ring-amber-500/40" },
+  { key: "progress", title: "In Progress", hint: "FIXER wrenching", dot: "bg-sky-500", ring: "ring-sky-500/40" },
+  { key: "done", title: "Done", hint: "awaiting TESTEES", dot: "bg-emerald-500", ring: "ring-emerald-500/40" },
+  { key: "merged", title: "Merged", hint: "PR shipped", dot: "bg-muted-foreground", ring: "ring-muted-foreground/40" },
+]
+
+const cards: CardT[] = [
+  { id: "CDP-2142", title: "Settings: add SSO toggle for enterprise workspaces", issue: 131, agent: "PM", tags: ["auth", "settings"], tone: "todo" },
+  { id: "CDP-2143", title: "Email: fix broken header spacing on Outlook iOS", issue: 133, agent: "PM", tags: ["email"], tone: "todo" },
+  { id: "CDP-2141", title: "Search: clear stale results after filter reset", issue: 128, agent: "ENG", tags: ["a11y", "search"], tone: "progress" },
+  { id: "CDP-2140", title: "Dashboard: chart legend overflows at 1280px", issue: 126, agent: "QA", tags: ["ui"], tone: "done" },
+  { id: "CDP-2139", title: "Onboarding: skip button ignored after org switch", issue: 122, agent: "QA", tags: ["onboarding"], tone: "merged" },
+]
+
+const chat: { who: Role; time: string; text: string }[] = [
+  { who: "PM", time: "11:42", text: "Issue #128 parsed. Creating CDP-2141 with 3 acceptance criteria." },
+  { who: "ENG", time: "11:45", text: "Picked up CDP-2141, pulled branch feat/search-reset-cache." },
+  { who: "ENG", time: "11:51", text: "Patch pushed. Moving card → Done." },
+  { who: "QA", time: "11:53", text: "4 Playwright scenarios staged. Running now." },
+  { who: "QA", time: "11:54", text: "All green. Raising PR #412." },
+]
+
+function CardItem({ c }: { c: CardT }) {
+  const col = columns.find((x) => x.key === c.tone)!
+  const a = AGENTS[AGENT_BY_ROLE[c.agent]]
   return (
     <div className="min-h-dvh bg-background">
       <div className="sticky top-0 z-20">
