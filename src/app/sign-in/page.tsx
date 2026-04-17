@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useState } from "react"
 
 import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
+import { CodapacLogo } from "@/components/codapac-logo"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -51,12 +52,7 @@ export default function SignInPage() {
           Back to home
         </Link>
 
-        <Link href="/" className="flex items-center gap-2">
-          <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
-            C
-          </div>
-          <span className="text-[15px] font-bold tracking-tight">codapac</span>
-        </Link>
+        <CodapacLogo size="sm" />
       </div>
 
       <main className="relative z-10 mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1 items-center gap-8 overflow-hidden px-6 py-6 lg:grid-cols-[1.15fr_1fr] lg:gap-12">

@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 
+import { CodapacLogo } from "@/components/codapac-logo"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
@@ -188,12 +189,7 @@ export default function VerifyPage() {
           <Step>Username</Step>
         </div>
 
-        <Link href="/" className="flex items-center gap-2">
-          <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
-            C
-          </div>
-          <span className="text-[15px] font-bold tracking-tight">codapac</span>
-        </Link>
+        <CodapacLogo size="sm" />
       </div>
 
       <main className="flex flex-1 items-center justify-center overflow-hidden px-6 py-6">

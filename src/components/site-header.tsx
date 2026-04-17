@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 
+import { CodapacLogo } from "@/components/codapac-logo"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { authClient } from "@/lib/auth-client"
@@ -16,47 +17,42 @@ export function SiteHeader() {
   const fake = useFakeSession()
   const signedIn = (!isPending && !!session) || !!fake
 
+  // Track scroll so the right-side nav can detach (stop following) when scrolling down.
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 12)
+    onScroll()
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+
   return (
-    <header
-      className={cn(
-        "shrink-0",
-        signedIn
-          ? "bg-neutral-950 text-white"
-          : "border-b border-border bg-background text-foreground",
-      )}
-    >
-      <div className="mx-auto flex w-full max-w-[1500px] items-center gap-4 px-6 py-3">
-        <Link
-          href={signedIn ? "/dashboard" : "/"}
-          className="flex shrink-0 items-center gap-2"
-        >
-          <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
-            C
-          </div>
-          <span
-            className={cn(
-              "text-[15px] font-bold tracking-tight",
-              signedIn ? "text-white" : "text-foreground",
-            )}
-          >
-            codapac
-          </span>
-        </Link>
+    <header className="shrink-0 border-b border-border/60 bg-background/80 text-foreground backdrop-blur-xl transition-colors duration-200 supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex w-full max-w-[1500px] items-center gap-4 px-6 py-4">
+        <CodapacLogo href={signedIn ? "/dashboard" : "/"} />
 
         <div className="flex-1" />
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div
+          aria-hidden={scrolled}
+          className={cn(
+            "flex shrink-0 items-center gap-3 transition-all duration-300 ease-out",
+            scrolled
+              ? "pointer-events-none -translate-y-2 opacity-0"
+              : "translate-y-0 opacity-100",
+          )}
+        >
           {signedIn ? (
             <>
               <Button
                 asChild
                 variant="ghost"
-                size="sm"
+                size="lg"
                 className={cn(
-                  "text-white/80 hover:bg-white/10 hover:text-white",
+                  "h-11 rounded-xl px-5 text-base font-semibold text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
                   (pathname.startsWith("/dashboard") ||
                     pathname.startsWith("/issues")) &&
-                    "bg-white/10 text-white hover:bg-white/20",
+                    "bg-foreground/5 text-foreground hover:bg-foreground/10",
                 )}
               >
                 <Link href="/dashboard">Dashboard</Link>
@@ -68,16 +64,20 @@ export function SiteHeader() {
               <Button
                 asChild
                 variant="ghost"
-                size="sm"
+                size="lg"
                 className={cn(
-                  "text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
+                  "h-11 rounded-xl px-5 text-base font-semibold text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
                   pathname.startsWith("/agents") &&
                     "bg-foreground/5 text-foreground hover:bg-foreground/10",
                 )}
               >
                 <Link href="/agents">Agents</Link>
               </Button>
-              <Button asChild size="sm" className="shadow-sm">
+              <Button
+                asChild
+                size="lg"
+                className="h-11 rounded-xl px-6 text-base font-semibold shadow-md shadow-primary/20 transition-all hover:shadow-lg hover:shadow-primary/30"
+              >
                 <Link href="/sign-in">Sign in</Link>
               </Button>
             </>
@@ -162,17 +162,17 @@ function UserMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex items-center gap-2 rounded-full bg-white/5 p-0.5 pr-2 ring-1 ring-inset ring-white/10 transition-colors hover:bg-white/10"
+        className="flex items-center gap-2.5 rounded-full bg-muted/60 p-1 pr-3.5 ring-1 ring-inset ring-border transition-all hover:bg-muted hover:ring-border/80"
       >
-        <Avatar size="sm" className="ring-1 ring-white/20">
+        <Avatar className="size-9 ring-1 ring-border">
           {user?.image ? (
             <AvatarImage src={user.image} alt={displayName} />
           ) : null}
-          <AvatarFallback className="bg-white/10 text-[10px] font-semibold text-white">
+          <AvatarFallback className="bg-muted text-xs font-semibold text-foreground">
             {initials}
           </AvatarFallback>
         </Avatar>
-        <span className="hidden max-w-[140px] truncate text-[12.5px] font-medium text-white/80 md:inline">
+        <span className="hidden max-w-[160px] truncate text-sm font-semibold text-foreground/90 md:inline">
           {displayName}
         </span>
       </button>
@@ -207,3 +207,4 @@ function UserMenu() {
     </div>
   )
 }
+
