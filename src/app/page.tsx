@@ -1,6 +1,8 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useEffect } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
 import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
@@ -8,6 +10,8 @@ import { LiveAgentChat } from "@/components/live-agent-chat"
 import { Reveal } from "@/components/reveal"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
+import { authClient } from "@/lib/auth-client"
+import { useFakeSession } from "@/lib/fake-auth"
 
 type Phase = {
   key: "listen" | "plan" | "fix" | "check"
@@ -342,38 +346,10 @@ type CardT = {
   tone: Tone
 }
 
-const columns: {
-  key: Tone
-  title: string
-  hint: string
-  dot: string
-  ring: string
-}[] = [
-  { key: "todo", title: "To Do", hint: "queued by BOSS", dot: "bg-amber-500", ring: "ring-amber-500/40" },
-  { key: "progress", title: "In Progress", hint: "FIXER wrenching", dot: "bg-sky-500", ring: "ring-sky-500/40" },
-  { key: "done", title: "Done", hint: "awaiting TESTEES", dot: "bg-emerald-500", ring: "ring-emerald-500/40" },
-  { key: "merged", title: "Merged", hint: "PR shipped", dot: "bg-muted-foreground", ring: "ring-muted-foreground/40" },
-]
+  useEffect(() => {
+    if (signedIn) router.replace("/dashboard")
+  }, [signedIn, router])
 
-const cards: CardT[] = [
-  { id: "CDP-2142", title: "Settings: add SSO toggle for enterprise workspaces", issue: 131, agent: "PM", tags: ["auth", "settings"], tone: "todo" },
-  { id: "CDP-2143", title: "Email: fix broken header spacing on Outlook iOS", issue: 133, agent: "PM", tags: ["email"], tone: "todo" },
-  { id: "CDP-2141", title: "Search: clear stale results after filter reset", issue: 128, agent: "ENG", tags: ["a11y", "search"], tone: "progress" },
-  { id: "CDP-2140", title: "Dashboard: chart legend overflows at 1280px", issue: 126, agent: "QA", tags: ["ui"], tone: "done" },
-  { id: "CDP-2139", title: "Onboarding: skip button ignored after org switch", issue: 122, agent: "QA", tags: ["onboarding"], tone: "merged" },
-]
-
-const chat: { who: Role; time: string; text: string }[] = [
-  { who: "PM", time: "11:42", text: "Issue #128 parsed. Creating CDP-2141 with 3 acceptance criteria." },
-  { who: "ENG", time: "11:45", text: "Picked up CDP-2141, pulled branch feat/search-reset-cache." },
-  { who: "ENG", time: "11:51", text: "Patch pushed. Moving card → Done." },
-  { who: "QA", time: "11:53", text: "4 Playwright scenarios staged. Running now." },
-  { who: "QA", time: "11:54", text: "All green. Raising PR #412." },
-]
-
-function CardItem({ c }: { c: CardT }) {
-  const col = columns.find((x) => x.key === c.tone)!
-  const a = AGENTS[AGENT_BY_ROLE[c.agent]]
   return (
     <div className="min-h-dvh bg-background">
       <div className="sticky top-0 z-20">
