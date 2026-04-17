@@ -64,23 +64,42 @@ export default function UsernamePage() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
-      <header className="shrink-0 bg-neutral-950 text-white">
-        <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between px-6 py-3">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
-              C
-            </div>
-            <span className="text-[15px] font-bold tracking-tight">codapac</span>
-          </Link>
-          <div className="hidden items-center gap-2 text-[12px] text-white/70 sm:inline-flex">
-            <Step active>Email</Step>
-            <Line />
-            <Step active>Verify</Step>
-            <Line />
-            <Step active>Username</Step>
-          </div>
+      {/* Floating top bar */}
+      <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between px-6 pt-5">
+        <Link
+          href="/sign-in/verify"
+          className="group inline-flex items-center gap-2 rounded-full border border-border bg-card/80 px-3 py-1.5 text-sm font-medium text-foreground shadow-sm backdrop-blur-md transition-all duration-200 hover:-translate-y-px hover:border-foreground/30 hover:shadow-md"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4 text-muted-foreground transition-transform group-hover:-translate-x-0.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+          Back
+        </Link>
+
+        <div className="hidden items-center gap-2 sm:inline-flex">
+          <Step done>Email</Step>
+          <Line />
+          <Step done>Verify</Step>
+          <Line />
+          <Step active>Username</Step>
         </div>
-      </header>
+
+        <Link href="/" className="flex items-center gap-2">
+          <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
+            C
+          </div>
+          <span className="text-[15px] font-bold tracking-tight">codapac</span>
+        </Link>
+      </div>
 
       <main className="flex flex-1 items-center justify-center overflow-hidden px-6 py-6">
         <Card className="w-full max-w-md rounded-2xl border-border bg-card p-7 shadow-lg">
@@ -227,18 +246,27 @@ function Rule({ ok, children }: { ok: boolean; children: React.ReactNode }) {
   )
 }
 
-function Step({ children, active }: { children: React.ReactNode; active?: boolean }) {
+function Step({ children, active, done }: { children: React.ReactNode; active?: boolean; done?: boolean }) {
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-        active ? "bg-white/15 text-white" : "text-white/50"
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+        active
+          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
+          : done
+            ? "text-emerald-600"
+            : "text-muted-foreground"
       }`}
     >
+      {done && (
+        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      )}
       {children}
     </span>
   )
 }
 
 function Line() {
-  return <span className="h-px w-4 bg-white/20" />
+  return <span className="h-px w-4 bg-border" />
 }

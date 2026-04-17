@@ -1,26 +1,44 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { AgentBadge } from "@/components/agent-badge"
+import { AGENTS, AgentKey } from "@/components/agent-orb"
+import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+
+type Role = "PM" | "ENG" | "QA"
+
+const AGENT_BY_ROLE: Record<Role, AgentKey> = {
+  PM: "priya",
+  ENG: "enzo",
+  QA: "quinn",
+}
+
+type Tone = "todo" | "progress" | "done" | "merged"
 
 type CardT = {
   id: string
   title: string
   issue: number
-  agent: "PM" | "ENG" | "QA"
+  agent: Role
   tags: string[]
-  tone: "todo" | "progress" | "done" | "merged"
+  tone: Tone
 }
 
-const columns: { key: CardT["tone"]; title: string; hint: string; dot: string }[] = [
-  { key: "todo", title: "To Do", hint: "queued by PM", dot: "bg-amber-500" },
-  { key: "progress", title: "In Progress", hint: "Engineer working", dot: "bg-sky-500" },
-  { key: "done", title: "Done", hint: "awaiting QA", dot: "bg-emerald-500" },
-  { key: "merged", title: "Merged", hint: "PR shipped", dot: "bg-muted-foreground" },
+const columns: {
+  key: Tone
+  title: string
+  hint: string
+  dot: string
+  ring: string
+}[] = [
+  { key: "todo", title: "To Do", hint: "queued by BOSS", dot: "bg-amber-500", ring: "ring-amber-500/40" },
+  { key: "progress", title: "In Progress", hint: "FIXER wrenching", dot: "bg-sky-500", ring: "ring-sky-500/40" },
+  { key: "done", title: "Done", hint: "awaiting TESTEES", dot: "bg-emerald-500", ring: "ring-emerald-500/40" },
+  { key: "merged", title: "Merged", hint: "PR shipped", dot: "bg-muted-foreground", ring: "ring-muted-foreground/40" },
 ]
 
 const cards: CardT[] = [
@@ -31,18 +49,26 @@ const cards: CardT[] = [
   { id: "CDP-2139", title: "Onboarding: skip button ignored after org switch", issue: 122, agent: "QA", tags: ["onboarding"], tone: "merged" },
 ]
 
-const chat = [
-  { who: "PM", name: "Priya", time: "11:42", text: "Issue #128 parsed. Creating CDP-2141 with 3 acceptance criteria.", tint: "bg-amber-500" },
-  { who: "ENG", name: "Enzo", time: "11:45", text: "Picked up CDP-2141, pulled branch feat/search-reset-cache.", tint: "bg-sky-500" },
-  { who: "ENG", name: "Enzo", time: "11:51", text: "Patch pushed. Moving card → Done.", tint: "bg-sky-500" },
-  { who: "QA", name: "Quinn", time: "11:53", text: "4 Playwright scenarios staged. Running now.", tint: "bg-emerald-500" },
-  { who: "QA", name: "Quinn", time: "11:54", text: "All green. Raising PR #412.", tint: "bg-emerald-500" },
+const chat: { who: Role; time: string; text: string }[] = [
+  { who: "PM", time: "11:42", text: "Issue #128 parsed. Creating CDP-2141 with 3 acceptance criteria." },
+  { who: "ENG", time: "11:45", text: "Picked up CDP-2141, pulled branch feat/search-reset-cache." },
+  { who: "ENG", time: "11:51", text: "Patch pushed. Moving card → Done." },
+  { who: "QA", time: "11:53", text: "4 Playwright scenarios staged. Running now." },
+  { who: "QA", time: "11:54", text: "All green. Raising PR #412." },
 ]
 
 function CardItem({ c }: { c: CardT }) {
   const col = columns.find((x) => x.key === c.tone)!
+  const a = AGENTS[AGENT_BY_ROLE[c.agent]]
   return (
-    <div className="group cursor-grab rounded-xl border border-border bg-card p-3 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md">
+    <Link
+      href={`/issues/${c.issue}`}
+      className="group relative block overflow-hidden rounded-xl border border-border bg-card p-3 shadow-xs transition-[transform,box-shadow,border-color] duration-200 ease-out hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+    >
+      {/* accent bar on hover */}
+      <span
+        className={`absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 ${col.dot} transition-transform duration-300 group-hover:scale-x-100`}
+      />
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] font-semibold tracking-wider text-muted-foreground">
           {c.id}
@@ -52,7 +78,9 @@ function CardItem({ c }: { c: CardT }) {
           {col.title}
         </Badge>
       </div>
-      <h4 className="mt-1.5 text-[13.5px] font-semibold leading-snug">{c.title}</h4>
+      <h4 className="mt-1.5 text-[13.5px] font-semibold leading-snug transition-colors group-hover:text-foreground">
+        {c.title}
+      </h4>
       <div className="mt-2.5 flex items-center justify-between">
         <div className="flex gap-1">
           {c.tags.map((t) => (
@@ -65,70 +93,42 @@ function CardItem({ c }: { c: CardT }) {
           ))}
         </div>
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-          <a className="underline-offset-2 hover:underline" href="#">#{c.issue}</a>
-          <Avatar className="h-5 w-5 text-[9px]">
-            <AvatarFallback
-              className={`${
-                c.agent === "PM" ? "bg-amber-500" : c.agent === "ENG" ? "bg-sky-500" : "bg-emerald-500"
-              } font-bold text-white`}
-            >
-              {c.agent[0]}
-            </AvatarFallback>
-          </Avatar>
+          <span className="underline-offset-2 group-hover:underline">#{c.issue}</span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background/80 px-1.5 py-0.5 transition-colors group-hover:border-foreground/20">
+            <AgentBadge agent={AGENT_BY_ROLE[c.agent]} size={14} />
+            <span className="font-semibold text-foreground/80">{a.name}</span>
+          </span>
         </div>
       </div>
-    </div>
+    </Link>
   )
 }
 
 export default function Home() {
   const [draft, setDraft] = useState("")
+  const [filter, setFilter] = useState<Role | "ALL">("ALL")
+
+  const roleCounts = useMemo(() => {
+    const c: Record<Role, number> = { PM: 0, ENG: 0, QA: 0 }
+    cards.forEach((x) => (c[x.agent] += 1))
+    return c
+  }, [])
+
+  const visibleCards = useMemo(
+    () => (filter === "ALL" ? cards : cards.filter((c) => c.agent === filter)),
+    [filter],
+  )
 
   return (
     <div className="min-h-dvh bg-background">
-      <header className="sticky top-0 z-20 bg-neutral-950 text-white">
-        <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-8">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="grid h-7 w-7 place-items-center rounded-md bg-primary text-[13px] font-bold text-primary-foreground">
-                C
-              </div>
-              <span className="text-[15px] font-bold tracking-tight">codapac</span>
-            </Link>
-            <nav className="hidden items-center gap-1 md:flex">
-              <Button asChild variant="ghost" size="sm" className="bg-white/10 text-white hover:bg-white/20">
-                <Link href="/">Board</Link>
-              </Button>
-              <Button asChild variant="ghost" size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
-                <a href="#sprints">Sprints</a>
-              </Button>
-              <Button asChild variant="ghost" size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
-                <a href="#prs">PRs</a>
-              </Button>
-              <Button asChild variant="ghost" size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
-                <a href="#agents">Agents</a>
-              </Button>
-              <Button asChild variant="ghost" size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
-                <a href="#docs">Docs</a>
-              </Button>
-            </nav>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white md:inline-flex">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              3 agents active
-            </span>
-            <Button asChild size="sm" className="shadow-sm">
-              <Link href="/sign-in">Sign in</Link>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <div className="sticky top-0 z-20">
+        <SiteHeader />
+      </div>
 
       <main className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-4 px-6 py-6 lg:grid-cols-[1fr_380px]">
         {/* Kanban board */}
         <section className="space-y-5">
-          <div className="flex items-end justify-between">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                 acme/web · sprint 24 · Q2
@@ -137,24 +137,66 @@ export default function Home() {
                 Autonomous board
               </h1>
               <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                The PM agent drops issues into To Do. The Engineer pulls cards
-                through to Done. QA closes the loop — green means PR, red
-                bounces the card back.
+                <span className="font-semibold text-amber-700">BOSS</span> drops
+                issues into To Do.{" "}
+                <span className="font-semibold text-sky-700">FIXER</span> pulls
+                cards through to Done.{" "}
+                <span className="font-semibold text-emerald-700">TESTEES</span>{" "}
+                closes the loop — green ships, red bounces it back.
               </p>
             </div>
             <div className="flex gap-2">
-              <Button type="button" variant="outline" size="sm">Filters</Button>
-              <Button type="button" size="sm">+ New issue</Button>
+              <Button type="button" variant="outline" size="sm">
+                Filters
+              </Button>
+              <Button type="button" size="sm">
+                + New issue
+              </Button>
             </div>
+          </div>
+
+          {/* Role filter chips */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setFilter("ALL")}
+              data-active={filter === "ALL"}
+              className="group inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-200 hover:-translate-y-px hover:text-foreground data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:bg-foreground data-[active=true]:text-background data-[active=true]:shadow-md"
+            >
+              All
+              <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground group-data-[active=true]:bg-background/20 group-data-[active=true]:text-background">
+                {cards.length}
+              </span>
+            </button>
+            {(Object.keys(AGENT_BY_ROLE) as Role[]).map((role) => {
+              const a = AGENTS[AGENT_BY_ROLE[role]]
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => setFilter(role)}
+                  data-active={filter === role}
+                  className="group inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-200 hover:-translate-y-px hover:text-foreground data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:shadow-md"
+                >
+                  <span className={`h-2 w-2 rounded-full ${a.dot}`} />
+                  <span className={`font-semibold ${a.accent} group-data-[active=true]:text-foreground`}>
+                    {a.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {roleCounts[role]}
+                  </span>
+                </button>
+              )
+            })}
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {columns.map((col) => {
-              const list = cards.filter((c) => c.tone === col.key)
+              const list = visibleCards.filter((c) => c.tone === col.key)
               return (
                 <div
                   key={col.key}
-                  className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3"
+                  className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 transition-colors duration-300 hover:border-foreground/15"
                 >
                   <div className="flex items-center justify-between px-1">
                     <div className="flex items-center gap-2">
@@ -171,8 +213,8 @@ export default function Home() {
                       <CardItem key={c.id} c={c} />
                     ))}
                     {list.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-border p-5 text-center text-xs text-muted-foreground">
-                        drop new cards here
+                      <div className="rounded-xl border border-dashed border-border p-5 text-center text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground/80">
+                        nothing here
                       </div>
                     )}
                   </div>
@@ -182,65 +224,74 @@ export default function Home() {
           </div>
 
           {/* tiny analytics strip */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
-              { k: "Cycle time", v: "54m", t: "↓ 12% wk/wk" },
-              { k: "PR green rate", v: "92%", t: "last 30 PRs" },
-              { k: "Bounces", v: "3", t: "sent back by QA" },
-              { k: "Active agents", v: "3 / 3", t: "pm · eng · qa" },
+              { k: "Cycle time", v: "54m", t: "↓ 12% wk/wk", trend: "text-emerald-600" },
+              { k: "PR green rate", v: "92%", t: "last 30 PRs", trend: "text-emerald-600" },
+              { k: "Bounces", v: "3", t: "sent back by TESTEES", trend: "text-muted-foreground" },
+              { k: "Active agents", v: "3 / 3", t: "BOSS · FIXER · TESTEES", trend: "text-muted-foreground" },
             ].map((s) => (
-              <div key={s.k} className="rounded-2xl border border-border bg-card p-4">
+              <div
+                key={s.k}
+                className="group rounded-2xl border border-border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md"
+              >
                 <div className="text-xs text-muted-foreground">{s.k}</div>
                 <div className="mt-1 text-2xl font-semibold tracking-tight">{s.v}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">{s.t}</div>
+                <div className={`mt-0.5 text-[11px] ${s.trend}`}>{s.t}</div>
               </div>
             ))}
           </div>
         </section>
 
         {/* Chat sidecar */}
-        <aside className="sticky top-[72px] flex h-[calc(100dvh-88px)] flex-col rounded-2xl border border-border bg-card">
+        <aside className="sticky top-[72px] flex h-[calc(100dvh-88px)] flex-col rounded-2xl border border-border bg-card shadow-xs">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="h-2 w-2 rounded-full bg-emerald-500 [animation:cp-breath_2s_ease-in-out_infinite]" />
               <h3 className="text-sm font-semibold">Sprint chat</h3>
               <span className="text-[11px] text-muted-foreground">#issue-128</span>
             </div>
-            <button type="button" className="text-xs text-muted-foreground hover:text-foreground">⋯</button>
+            <button type="button" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
+              ⋯
+            </button>
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
-            <div className="rounded-xl bg-secondary/60 p-3 text-xs text-secondary-foreground">
-              <div className="mb-1 font-semibold">Sprint started</div>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+              <div className="mb-1 font-semibold text-emerald-700">Sprint started</div>
               Issue <span className="font-mono">#128</span> picked up at 11:42.
-              Three agents assigned automatically.
+              Three bots assigned automatically.
             </div>
 
-            {chat.map((m, i) => (
-              <div key={i} className="flex gap-2.5">
-                <Avatar className="h-7 w-7 text-[10px]">
-                  <AvatarFallback className={`${m.tint} font-bold text-white`}>
-                    {m.name[0]}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-semibold">{m.name}</span>
-                    <span className="text-[10px] text-muted-foreground">{m.who}</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground">{m.time}</span>
+            {chat.map((m, i) => {
+              const a = AGENTS[AGENT_BY_ROLE[m.who]]
+              return (
+                <div
+                  key={i}
+                  className="group flex gap-2.5 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted/40"
+                >
+                  <AgentBadge agent={AGENT_BY_ROLE[m.who]} size={28} />
+                  <div className="flex-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className={`text-[13px] font-semibold ${a.accent}`}>{a.name}</span>
+                      <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] font-semibold tracking-wider text-muted-foreground">
+                        {m.who}
+                      </span>
+                      <span className="ml-auto font-mono text-[10px] text-muted-foreground">{m.time}</span>
+                    </div>
+                    <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">{m.text}</p>
                   </div>
-                  <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">{m.text}</p>
                 </div>
-              </div>
-            ))}
+              )
+            })}
 
-            <div className="flex items-center gap-2 pl-9 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-2 pl-[38px] text-[11px] text-muted-foreground">
               <span className="flex gap-0.5">
-                <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
-                <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:120ms]" />
-                <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:240ms]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-sky-500 [animation-delay:0ms]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-sky-500 [animation-delay:120ms]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-sky-500 [animation-delay:240ms]" />
               </span>
-              Enzo is typing…
+              <span className="font-semibold text-sky-700">FIXER</span> is typing…
             </div>
           </div>
 
@@ -251,21 +302,23 @@ export default function Home() {
             }}
             className="border-t border-border p-3"
           >
-            <div className="flex items-end gap-2 rounded-xl border border-input bg-card p-2 focus-within:ring-2 focus-within:ring-ring/30">
+            <div className="flex items-end gap-2 rounded-xl border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                placeholder="Paste a github issue url, or nudge an agent @pm @eng @qa"
+                placeholder="Paste a GitHub issue URL, or nudge a bot — @boss @fixer @testees"
                 className="flex-1 resize-none bg-transparent text-[13px] placeholder:text-muted-foreground focus:outline-none"
               />
-              <Button type="submit" size="sm" className="h-8 shrink-0">Send</Button>
+              <Button type="submit" size="sm" className="h-8 shrink-0">
+                Send
+              </Button>
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
               <div className="flex gap-3">
-                <button type="button">＠ mention</button>
-                <button type="button">🔗 link</button>
-                <button type="button">⌘K commands</button>
+                <button type="button" className="transition-colors hover:text-foreground">＠ mention</button>
+                <button type="button" className="transition-colors hover:text-foreground">🔗 link</button>
+                <button type="button" className="transition-colors hover:text-foreground">⌘K commands</button>
               </div>
               <span>⌘↵ to send</span>
             </div>

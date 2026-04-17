@@ -174,3 +174,120 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  @keyframes cp-orbit {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes cp-orbit-reverse {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(-360deg); }
+  }
+  @keyframes cp-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  @keyframes cp-breath {
+    0%, 100% { transform: scale(1); opacity: 0.88; }
+    50% { transform: scale(1.06); opacity: 1; }
+  }
+  @keyframes cp-scan {
+    0% { transform: rotate(0deg); opacity: 0.4; }
+    50% { opacity: 1; }
+    100% { transform: rotate(360deg); opacity: 0.4; }
+  }
+  @keyframes cp-ping-soft {
+    0% { transform: scale(0.8); opacity: 0.55; }
+    80%, 100% { transform: scale(2); opacity: 0; }
+  }
+  @keyframes cp-stream {
+    0% { transform: translateX(-120%); opacity: 0; }
+    20% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { transform: translateX(120%); opacity: 0; }
+  }
+  @keyframes cp-blink {
+    0%, 40%, 100% { opacity: 1; }
+    20%, 60% { opacity: 0.25; }
+  }
+  @keyframes cp-tick {
+    0% { stroke-dashoffset: 24; opacity: 0; }
+    30% { opacity: 1; }
+    60%, 100% { stroke-dashoffset: 0; opacity: 1; }
+  }
+  @keyframes cp-tag-land {
+    0% { transform: translate(140%, -60%) scale(0.6); opacity: 0; }
+    40% { transform: translate(0, 0) scale(1); opacity: 1; }
+    70% { transform: translate(0, 0) scale(1); opacity: 1; }
+    100% { transform: translate(-20%, 0) scale(0.9); opacity: 0; }
+  }
+  @keyframes cp-type {
+    0% { width: 0%; }
+    60% { width: 100%; }
+    80%, 100% { width: 100%; }
+  }
+  @keyframes cp-grow {
+    0% { transform: scaleX(0.15); transform-origin: left; opacity: 0.5; }
+    60% { transform: scaleX(1); transform-origin: left; opacity: 1; }
+    100% { transform: scaleX(1); transform-origin: left; opacity: 1; }
+  }
+  @keyframes cp-commit {
+    0%, 20% { transform: translateX(-30%); opacity: 0; }
+    40% { transform: translateX(0); opacity: 1; }
+    70% { transform: translateX(0); opacity: 1; }
+    100% { transform: translateX(80%); opacity: 0; }
+  }
+  @keyframes cp-fill {
+    0% { transform: scaleX(0); transform-origin: left; }
+    70%, 100% { transform: scaleX(1); transform-origin: left; }
+  }
+  @keyframes cp-eye-blink {
+    0%, 92%, 100% { transform: scaleY(1); }
+    94%, 98% { transform: scaleY(0.1); }
+  }
+  @keyframes cp-spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes cp-wiggle {
+    0%, 100% { transform: rotate(-10deg); }
+    50% { transform: rotate(14deg); }
+  }
+  @keyframes cp-bubble {
+    0% { transform: translateY(10%) scale(0.5); opacity: 0; }
+    30% { opacity: 1; }
+    100% { transform: translateY(-140%) scale(1.1); opacity: 0; }
+  }
+  @keyframes cp-swing {
+    0%, 100% { transform: rotate(-18deg); }
+    50% { transform: rotate(20deg); }
+  }
+  @keyframes cp-spark {
+    0%, 100% { opacity: 0; transform: translate(0, 0) scale(0.4); }
+    30% { opacity: 1; transform: translate(30%, -20%) scale(1); }
+    70% { opacity: 0; transform: translate(60%, -40%) scale(0.6); }
+  }
+  @keyframes cp-bob {
+    0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+    50% { transform: translateY(-5%) rotate(1.5deg); }
+  }
+  @keyframes cp-mouth {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.45); }
+  }
+  @keyframes cp-fade-up {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes cp-dash-flow {
+    to { stroke-dashoffset: -32; }
+  }
+  @keyframes cp-contour-breathe {
+    0%, 100% { transform: scale(1); opacity: 0.85; }
+    50% { transform: scale(1.04); opacity: 1; }
+  }
+  @keyframes cp-twinkle {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 0.9; }
+  }
+}

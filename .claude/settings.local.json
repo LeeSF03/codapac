@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bunx --bun shadcn@latest add button card input badge avatar scroll-area separator tabs textarea --yes)",
+      "Bash(bun install *)"
+    ]
+  }
+}
