@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { authClient } from "@/lib/auth-client"
-import { useFakeSession } from "@/lib/fake-auth"
 
 const activity: Record<AgentKey, { time: string; text: string }[]> = {
   priya: [
@@ -54,8 +53,7 @@ const stats: Record<AgentKey, { k: string; v: string }[]> = {
 export default function AgentsPage() {
   const router = useRouter()
   const { data: session, isPending } = authClient.useSession()
-  const fake = useFakeSession()
-  const signedIn = (!isPending && !!session) || !!fake
+  const signedIn = !isPending && !!session
 
   useEffect(() => {
     if (signedIn) router.replace("/dashboard")
