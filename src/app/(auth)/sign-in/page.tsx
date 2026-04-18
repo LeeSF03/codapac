@@ -1,15 +1,15 @@
 import { redirect } from "next/navigation"
 
-import { getCurrentAuthUser, hasUsername } from "@/lib/auth-server"
+import { getAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { SignInCard } from "./_components/sign-in-card"
 import { SignInPreview } from "./_components/sign-in-preview"
 
 export default async function SignInPage() {
-  const user = await getCurrentAuthUser()
+  const user = await getAuthUser()
 
   if (user) {
-    redirect(hasUsername(user) ? "/" : "/sign-in/username")
+    redirect(hasUsername(user) ? "/dashboard" : "/sign-in/username")
   }
 
   return (

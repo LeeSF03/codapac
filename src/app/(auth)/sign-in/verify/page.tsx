@@ -1,15 +1,15 @@
 import { redirect } from "next/navigation"
 
-import { getCurrentAuthUser, hasUsername } from "@/lib/auth-server"
+import { getAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { SignInSteps } from "../_components/sign-in-steps"
 import { VerifyCard } from "./_components/verify-card"
 
 export default async function VerifyPage() {
-  const user = await getCurrentAuthUser()
+  const user = await getAuthUser()
 
   if (user) {
-    redirect(hasUsername(user) ? "/" : "/sign-in/username")
+    redirect(hasUsername(user) ? "/dashboard" : "/sign-in/username")
   }
 
   return (

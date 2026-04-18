@@ -17,7 +17,7 @@ export const {
   convexSiteUrl: process.env.NEXT_PUBLIC_CONVEX_SITE_URL!,
 })
 
-export async function getCurrentAuthUser() {
+export async function getAuthUser() {
   if (!(await isAuthenticated())) {
     return null
   }
