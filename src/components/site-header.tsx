@@ -24,6 +24,15 @@ export function SiteHeader({ fullBleed = false }: { fullBleed?: boolean } = {}) 
     return () => window.removeEventListener("scroll", onScroll)
   }, [])
 
+  // Track scroll so the right-side nav can detach (stop following) when scrolling down.
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 12)
+    onScroll()
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+
   return (
     <header className="shrink-0 border-b border-border/60 bg-background/80 text-foreground backdrop-blur-xl transition-colors duration-200 supports-[backdrop-filter]:bg-background/60">
       <div
@@ -34,7 +43,33 @@ export function SiteHeader({ fullBleed = false }: { fullBleed?: boolean } = {}) 
       >
         <CodapacLogo href={signedIn ? "/dashboard" : "/"} />
 
-        <div className="flex-1" />
+          {variant === "app" && (
+            <nav className="hidden items-center gap-1 md:flex">
+              {NAV.map((item) => {
+                const active =
+                  item.href === "/"
+                    ? pathname === "/"
+                    : item.href === "/dashboard"
+                      ? pathname.startsWith("/dashboard") || pathname.startsWith("/issues")
+                      : pathname.startsWith(item.href)
+                return (
+                  <Button
+                    key={item.href}
+                    asChild
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                      "text-white/80 hover:bg-white/10 hover:text-white",
+                      active && "bg-white/10 text-white hover:bg-white/20",
+                    )}
+                  >
+                    <Link href={item.href}>{item.label}</Link>
+                  </Button>
+                )
+              })}
+            </nav>
+          )}
+        </div>
 
         <div
           aria-hidden={scrolled}
