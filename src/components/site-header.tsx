@@ -8,14 +8,12 @@ import { CodapacLogo } from "@/components/codapac-logo"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { authClient } from "@/lib/auth-client"
-import { clearFakeSession, useFakeSession } from "@/lib/fake-auth"
 import { cn } from "@/lib/utils"
 
-export function SiteHeader() {
+export function SiteHeader({ fullBleed = false }: { fullBleed?: boolean } = {}) {
   const pathname = usePathname()
   const { data: session, isPending } = authClient.useSession()
-  const fake = useFakeSession()
-  const signedIn = (!isPending && !!session) || !!fake
+  const signedIn = !isPending && !!session
 
   // Track scroll so the right-side nav can detach (stop following) when scrolling down.
   const [scrolled, setScrolled] = useState(false)
@@ -28,7 +26,12 @@ export function SiteHeader() {
 
   return (
     <header className="shrink-0 border-b border-border/60 bg-background/80 text-foreground backdrop-blur-xl transition-colors duration-200 supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex w-full max-w-[1500px] items-center gap-4 px-6 py-4">
+      <div
+        className={cn(
+          "flex w-full items-center gap-4 px-6 py-4",
+          fullBleed ? "" : "mx-auto max-w-[1500px]",
+        )}
+      >
         <CodapacLogo href={signedIn ? "/dashboard" : "/"} />
 
         <div className="flex-1" />
@@ -56,6 +59,18 @@ export function SiteHeader() {
                 )}
               >
                 <Link href="/dashboard">Dashboard</Link>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                size="lg"
+                className={cn(
+                  "h-11 rounded-xl px-5 text-base font-semibold text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
+                  pathname.startsWith("/chat") &&
+                    "bg-foreground/5 text-foreground hover:bg-foreground/10",
+                )}
+              >
+                <Link href="/chat">Chat</Link>
               </Button>
               <UserMenu />
             </>
@@ -91,7 +106,6 @@ export function SiteHeader() {
 function UserMenu() {
   const router = useRouter()
   const { data: session } = authClient.useSession()
-  const fake = useFakeSession()
   const [open, setOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
@@ -112,14 +126,9 @@ function UserMenu() {
     }
   }, [open])
 
-  const realUser = session?.user as
+  const user = session?.user as
     | { email?: string | null; name?: string | null; image?: string | null }
     | undefined
-  const user: {
-    email?: string | null
-    name?: string | null
-    image?: string | null
-  } | undefined = realUser ?? fake?.user
   const email = user?.email ?? ""
   const displayName =
     user?.name?.trim() || (email ? email.split("@")[0] : "") || "you"
@@ -135,20 +144,14 @@ function UserMenu() {
     if (signingOut) return
     setSigningOut(true)
     try {
-      clearFakeSession()
-      if (session) {
-        await authClient.signOut({
-          fetchOptions: {
-            onSuccess: () => {
-              router.push("/")
-              router.refresh()
-            },
+      await authClient.signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            router.push("/")
+            router.refresh()
           },
-        })
-      } else {
-        router.push("/")
-        router.refresh()
-      }
+        },
+      })
     } finally {
       setSigningOut(false)
       setOpen(false)
@@ -193,6 +196,14 @@ function UserMenu() {
             )}
           </div>
           <div className="p-1">
+            <Link
+              href="/profile"
+              onClick={() => setOpen(false)}
+              role="menuitem"
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              Profile
+            </Link>
             <button
               type="button"
               onClick={handleSignOut}

@@ -59,7 +59,7 @@ export default function UsernamePage() {
     if (!canSubmit) return
     setSubmitting(true)
     setTimeout(() => {
-      router.push("/")
+      router.push("/dashboard")
     }, 500)
   }
 

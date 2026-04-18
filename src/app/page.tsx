@@ -11,7 +11,6 @@ import { Reveal } from "@/components/reveal"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { authClient } from "@/lib/auth-client"
-import { useFakeSession } from "@/lib/fake-auth"
 
 type Phase = {
   key: "listen" | "plan" | "fix" | "check"
@@ -164,8 +163,7 @@ const FRIENDLY_BLURBS: Record<AgentKey, { role: string; blurb: string }> = {
 export default function Home() {
   const router = useRouter()
   const { data: session, isPending } = authClient.useSession()
-  const fake = useFakeSession()
-  const signedIn = (!isPending && !!session) || !!fake
+  const signedIn = !isPending && !!session
 
   useEffect(() => {
     if (signedIn) router.replace("/dashboard")

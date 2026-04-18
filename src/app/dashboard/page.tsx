@@ -1,13 +1,15 @@
 "use client"
 
 import Link from "next/link"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
 import { AGENTS, AgentKey } from "@/components/agent-orb"
 import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { authClient } from "@/lib/auth-client"
+import { sendChatMessage } from "@/lib/chat-bus"
 
 type Role = "PM" | "ENG" | "QA"
 
@@ -106,6 +108,39 @@ function CardItem({ c }: { c: CardT }) {
 export default function DashboardPage() {
   const [draft, setDraft] = useState("")
   const [filter, setFilter] = useState<Role | "ALL">("ALL")
+  const [forwarded, setForwarded] = useState(false)
+  const forwardTimer = useRef<number | null>(null)
+
+  const { data: session } = authClient.useSession()
+  const displayName =
+    (session?.user?.name?.trim() as string | undefined) ||
+    (session?.user?.email
+      ? (session.user.email as string).split("@")[0]
+      : undefined) ||
+    "you"
+
+  useEffect(() => {
+    return () => {
+      if (forwardTimer.current !== null) {
+        window.clearTimeout(forwardTimer.current)
+      }
+    }
+  }, [])
+
+  const handleSprintSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const ok = sendChatMessage(draft, displayName)
+    if (!ok) return
+    setDraft("")
+    setForwarded(true)
+    if (forwardTimer.current !== null) {
+      window.clearTimeout(forwardTimer.current)
+    }
+    forwardTimer.current = window.setTimeout(() => {
+      setForwarded(false)
+      forwardTimer.current = null
+    }, 2400)
+  }
 
   const roleCounts = useMemo(() => {
     const c: Record<Role, number> = { PM: 0, ENG: 0, QA: 0 }
@@ -294,22 +329,27 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              setDraft("")
-            }}
-            className="border-t border-border p-3"
-          >
+          <form onSubmit={handleSprintSubmit} className="border-t border-border p-3">
             <div className="flex items-end gap-2 rounded-xl border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault()
+                    handleSprintSubmit(e)
+                  }
+                }}
                 rows={2}
                 placeholder="Paste a GitHub issue URL, or nudge a bot — @boss @fixer @testees"
                 className="flex-1 resize-none bg-transparent text-[13px] placeholder:text-muted-foreground focus:outline-none"
               />
-              <Button type="submit" size="sm" className="h-8 shrink-0">
+              <Button
+                type="submit"
+                size="sm"
+                className="h-8 shrink-0"
+                disabled={draft.trim().length === 0}
+              >
                 Send
               </Button>
             </div>
@@ -319,7 +359,17 @@ export default function DashboardPage() {
                 <button type="button" className="transition-colors hover:text-foreground">🔗 link</button>
                 <button type="button" className="transition-colors hover:text-foreground">⌘K commands</button>
               </div>
-              <span>⌘↵ to send</span>
+              {forwarded ? (
+                <Link
+                  href="/chat"
+                  className="inline-flex items-center gap-1 font-medium text-emerald-600 transition-colors hover:text-emerald-700"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  Sent to Squad chat →
+                </Link>
+              ) : (
+                <span>⌘↵ to send · shared with Squad chat</span>
+              )}
             </div>
           </form>
         </aside>
