@@ -1,3 +1,4 @@
+import type { Route } from "next"
 import { redirect } from "next/navigation"
 
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
@@ -9,7 +10,11 @@ export default async function SignInPage() {
   const user = await getAuthUser()
 
   if (user) {
-    redirect(hasUsername(user) ? "/dashboard" : "/sign-in/username")
+    redirect(
+      hasUsername(user)
+        ? ("/project" as Route)
+        : ("/sign-in/username" as Route),
+    )
   }
 
   return (

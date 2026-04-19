@@ -1,5 +1,6 @@
 "use client"
 
+import type { Route } from "next"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
@@ -63,7 +64,7 @@ export default function AgentsPage() {
   const signedIn = !isPending && !!session
 
   useEffect(() => {
-    if (signedIn) router.replace("/dashboard")
+    if (signedIn) router.replace("/project" as Route)
   }, [signedIn, router])
 
   const [focus, setFocus] = useState<AgentKey>("priya")

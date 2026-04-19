@@ -1,3 +1,4 @@
+import type { Route } from "next"
 import { redirect } from "next/navigation"
 
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
@@ -13,7 +14,7 @@ export default async function UsernamePage() {
   }
 
   if (hasUsername(user)) {
-    redirect("/dashboard")
+    redirect("/project" as Route)
   }
 
   return (
