@@ -4,7 +4,7 @@ import Link from "next/link"
 import { use, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
-import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
+import { AGENTS, AgentKey, AgentName, AgentOrb } from "@/components/agent-orb"
 import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -212,9 +212,12 @@ export default function IssuePage({
                       />
                       <div className="flex-1 pt-0.5">
                         <div className="flex flex-wrap items-baseline gap-2">
-                          <span className={`text-[13px] font-semibold ${a.accent}`}>
+                          <AgentName
+                            agent={e.agent}
+                            className="text-[13px] font-semibold"
+                          >
                             {a.name}
-                          </span>
+                          </AgentName>
                           <KindChip kind={e.kind} />
                           <span className="ml-auto font-mono text-[11px] text-muted-foreground">
                             {e.time}
@@ -258,9 +261,12 @@ export default function IssuePage({
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`text-[13px] font-semibold ${a.accent}`}>
+                        <AgentName
+                          agent={k}
+                          className="text-[13px] font-semibold"
+                        >
                           {a.name}
-                        </span>
+                        </AgentName>
                         <span className="text-[11px] text-muted-foreground">
                           {a.role}
                         </span>
@@ -296,9 +302,12 @@ export default function IssuePage({
                       <AgentBadge agent={m.agent} size={28} />
                       <div className="flex-1">
                         <div className="flex items-baseline gap-2">
-                          <span className={`text-[13px] font-semibold ${a.accent}`}>
+                          <AgentName
+                            agent={m.agent}
+                            className="text-[13px] font-semibold"
+                          >
                             {a.name}
-                          </span>
+                          </AgentName>
                           <span className="ml-auto font-mono text-[10px] text-muted-foreground">
                             {m.time}
                           </span>

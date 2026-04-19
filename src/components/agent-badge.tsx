@@ -1,20 +1,12 @@
-import { AgentKey } from "@/components/agent-orb"
-import { cn } from "@/lib/utils"
+"use client"
 
-const theme: Record<AgentKey, { bg: string; ring: string }> = {
-  priya: {
-    bg: "bg-gradient-to-br from-amber-400 to-amber-600",
-    ring: "ring-amber-500/30",
-  },
-  enzo: {
-    bg: "bg-gradient-to-br from-sky-400 to-sky-600",
-    ring: "ring-sky-500/30",
-  },
-  quinn: {
-    bg: "bg-gradient-to-br from-emerald-400 to-emerald-600",
-    ring: "ring-emerald-500/30",
-  },
-}
+import {
+  AgentKey,
+  agentBadgeRingStyles,
+  agentBadgeSurfaceStyles,
+} from "@/components/agent-orb"
+
+import { cn } from "@/lib/utils"
 
 /**
  * Small, uniform avatar-style badge for each agent. Renders a distinctive SVG
@@ -31,15 +23,15 @@ export function AgentBadge({
   ring?: boolean
   className?: string
 }) {
-  const t = theme[agent]
   return (
     <span
       style={{ width: size, height: size }}
       className={cn(
         "inline-grid shrink-0 place-items-center rounded-full text-white shadow-xs",
-        t.bg,
-        ring && `ring-2 ring-offset-2 ring-offset-card ${t.ring}`,
-        className,
+        agentBadgeSurfaceStyles({ agent }),
+        ring && "ring-offset-card ring-2 ring-offset-2",
+        ring && agentBadgeRingStyles({ agent }),
+        className
       )}
     >
       <AgentMark agent={agent} className="h-[55%] w-[55%]" />
@@ -65,10 +57,7 @@ function PriyaMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden className={className}>
       {/* crown */}
-      <path
-        d="M5 6 L7 3 L12 5.5 L17 3 L19 6 Z"
-        fill="currentColor"
-      />
+      <path d="M5 6 L7 3 L12 5.5 L17 3 L19 6 Z" fill="currentColor" />
       {/* head */}
       <rect x="4.5" y="7" width="15" height="12" rx="4" fill="currentColor" />
       {/* eyes */}
@@ -91,7 +80,10 @@ function EnzoMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden className={className}>
       {/* antenna bolt */}
-      <path d="M13 2.5 L10.5 6 L12.5 6 L11 9 L14 5 L12 5 Z" fill="currentColor" />
+      <path
+        d="M13 2.5 L10.5 6 L12.5 6 L11 9 L14 5 L12 5 Z"
+        fill="currentColor"
+      />
       {/* head */}
       <rect x="4" y="6" width="16" height="11" rx="4.5" fill="currentColor" />
       {/* visor */}

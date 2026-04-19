@@ -4,7 +4,14 @@ import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
-import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
+import {
+  AGENTS,
+  AgentName,
+  AgentRoleTag,
+  AgentStatusDot,
+  AgentKey,
+  AgentOrb,
+} from "@/components/agent-orb"
 import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
@@ -96,8 +103,13 @@ export default function AgentsPage() {
                     data-active={focus === k}
                     className="group flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium shadow-xs transition-all duration-200 hover:-translate-y-px hover:border-foreground/30 data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:shadow-md"
                   >
-                    <span className={`h-2 w-2 rounded-full ${a.dot} transition-transform group-data-[active=true]:scale-125`} />
-                    <span className={`transition-colors ${a.accent}`}>{a.name}</span>
+                    <AgentStatusDot
+                      agent={k}
+                      className="h-2 w-2 rounded-full transition-transform group-data-[active=true]:scale-125"
+                    />
+                    <AgentName agent={k} className="transition-colors">
+                      {a.name}
+                    </AgentName>
                     <span className="text-[11px] text-muted-foreground">{a.role}</span>
                   </button>
                 )
@@ -123,12 +135,17 @@ export default function AgentsPage() {
               <AgentOrb agent={focus} size={220} />
               <div className="text-center">
                 <div className="flex items-center justify-center gap-2">
-                  <h2 className={`text-2xl font-semibold tracking-tight ${AGENTS[focus].accent}`}>
+                  <AgentName
+                    agent={focus}
+                    className="text-2xl font-semibold tracking-tight"
+                  >
                     {AGENTS[focus].name}
-                  </h2>
-                  <Badge variant="outline" className={`gap-1.5 ${AGENTS[focus].chip} border-transparent`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${AGENTS[focus].dot}`} />
-                    {AGENTS[focus].role}
+                  </AgentName>
+                  <Badge
+                    variant="outline"
+                    className="border-transparent"
+                  >
+                    <AgentRoleTag agent={focus} className="gap-1.5" />
                   </Badge>
                 </div>
                 <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -164,17 +181,25 @@ export default function AgentsPage() {
                 className="group relative cursor-pointer overflow-hidden rounded-2xl border-border bg-card p-6 shadow-xs transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md data-[active=true]:-translate-y-0.5 data-[active=true]:border-foreground/40 data-[active=true]:shadow-lg"
                 onClick={() => setFocus(k)}
               >
-                <span
-                  className={`absolute inset-x-0 top-0 h-1 origin-left scale-x-0 ${a.dot} transition-transform duration-300 group-hover:scale-x-100 group-data-[active=true]:scale-x-100`}
+                <AgentStatusDot
+                  agent={k}
+                  className="absolute inset-x-0 top-0 h-1 origin-left scale-x-0 transition-transform duration-300 group-hover:scale-x-100 group-data-[active=true]:scale-x-100"
                 />
                 <div className="flex items-start gap-4">
                   <AgentOrb agent={k} size={96} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <h3 className={`text-lg font-semibold tracking-tight ${a.accent}`}>{a.name}</h3>
-                      <Badge variant="outline" className={`gap-1.5 ${a.chip} border-transparent`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${a.dot}`} />
-                        {a.role}
+                      <AgentName
+                        agent={k}
+                        className="text-lg font-semibold tracking-tight"
+                      >
+                        {a.name}
+                      </AgentName>
+                      <Badge
+                        variant="outline"
+                        className="border-transparent"
+                      >
+                        <AgentRoleTag agent={k} className="gap-1.5" />
                       </Badge>
                     </div>
                     <p className="text-[13px] text-muted-foreground">{a.title}</p>
@@ -222,9 +247,9 @@ export default function AgentsPage() {
               <h2 className="text-xl font-semibold tracking-tight">Live activity</h2>
               <p className="text-sm text-muted-foreground">
                 Latest moves from{" "}
-                <span className={`font-semibold ${AGENTS[focus].accent}`}>
+                <AgentName agent={focus} className="font-semibold">
                   {AGENTS[focus].name}
-                </span>
+                </AgentName>
                 .
               </p>
             </div>
@@ -239,7 +264,10 @@ export default function AgentsPage() {
                     data-active={focus === k}
                     className="flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium text-muted-foreground transition-colors hover:text-foreground data-[active=true]:bg-muted data-[active=true]:text-foreground"
                   >
-                    <span className={`h-1.5 w-1.5 rounded-full ${a.dot}`} />
+                    <AgentStatusDot
+                      agent={k}
+                      className="h-1.5 w-1.5 rounded-full"
+                    />
                     <span className="data-[active=true]:font-semibold">{a.name}</span>
                   </button>
                 )
@@ -258,9 +286,12 @@ export default function AgentsPage() {
                   <AgentBadge agent={focus} size={32} className="mt-0.5" />
                   <div className="flex-1">
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-[13px] font-semibold ${AGENTS[focus].accent}`}>
+                      <AgentName
+                        agent={focus}
+                        className="text-[13px] font-semibold"
+                      >
                         {AGENTS[focus].name}
-                      </span>
+                      </AgentName>
                       <span className="text-[11px] text-muted-foreground">{AGENTS[focus].role}</span>
                       <span className="ml-auto font-mono text-[11px] text-muted-foreground">
                         {item.time}

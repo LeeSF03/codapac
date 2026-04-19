@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
-import { AGENTS, AgentKey } from "@/components/agent-orb"
+import {
+  AGENTS,
+  AgentName,
+  AgentStatusDot,
+  AgentKey,
+} from "@/components/agent-orb"
 import { Button } from "@/components/ui/button"
 import { SiteHeader } from "@/components/site-header"
 import { authClient } from "@/lib/auth-client"
@@ -543,13 +548,10 @@ function TopStrip({
             return (
               <span
                 key={k}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full bg-background px-2 py-0.5 text-[11.5px] font-semibold ring-1 ring-border",
-                  a.accent,
-                )}
+                className="inline-flex items-center gap-1.5 rounded-full bg-background px-2 py-0.5 text-[11.5px] font-semibold ring-1 ring-border"
               >
                 <AgentBadge agent={k} size={16} />
-                {a.name}
+                <AgentName agent={k}>{a.name}</AgentName>
                 <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500 [animation:cp-breath_2s_ease-in-out_infinite]" />
               </span>
             )
@@ -612,9 +614,9 @@ function AgentBubble({ msg }: { msg: AgentMsg }) {
       <AgentBadge agent={msg.agent} size={34} className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className={cn("text-[14px] font-semibold", a.accent)}>
+          <AgentName agent={msg.agent} className="text-[14px] font-semibold">
             {a.name}
-          </span>
+          </AgentName>
           <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9.5px] font-semibold tracking-wider text-muted-foreground">
             {a.role}
           </span>
@@ -658,11 +660,14 @@ function TypingRow({ agent }: { agent: AgentKey }) {
   return (
     <div className="flex items-center gap-2 pl-[46px] text-[12px] text-muted-foreground">
       <span className="flex gap-0.5">
-        <span className={cn("h-1.5 w-1.5 animate-bounce rounded-full", a.dot, "[animation-delay:0ms]")} />
-        <span className={cn("h-1.5 w-1.5 animate-bounce rounded-full", a.dot, "[animation-delay:120ms]")} />
-        <span className={cn("h-1.5 w-1.5 animate-bounce rounded-full", a.dot, "[animation-delay:240ms]")} />
+        <AgentStatusDot agent={agent} className="h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:0ms]" />
+        <AgentStatusDot agent={agent} className="h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:120ms]" />
+        <AgentStatusDot agent={agent} className="h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:240ms]" />
       </span>
-      <span className={cn("font-semibold", a.accent)}>{a.name}</span> is typing…
+      <AgentName agent={agent} className="font-semibold">
+        {a.name}
+      </AgentName>{" "}
+      is typing…
     </div>
   )
 }

@@ -15,7 +15,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
 
     // Convex generated files:
-    "convex/_generated/**",
+    "convex/**/_generated/**",
   ]),
 ])
 
