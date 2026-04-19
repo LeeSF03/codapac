@@ -4,7 +4,12 @@ import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { AgentBadge } from "@/components/agent-badge"
-import { AGENTS, AgentKey } from "@/components/agent-orb"
+import {
+  AGENTS,
+  AgentName,
+  AgentStatusDot,
+  AgentKey,
+} from "@/components/agent-orb"
 import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -212,10 +217,16 @@ export default function DashboardPage() {
                   data-active={filter === role}
                   className="group inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-200 hover:-translate-y-px hover:text-foreground data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:shadow-md"
                 >
-                  <span className={`h-2 w-2 rounded-full ${a.dot}`} />
-                  <span className={`font-semibold ${a.accent} group-data-[active=true]:text-foreground`}>
+                  <AgentStatusDot
+                    agent={AGENT_BY_ROLE[role]}
+                    className="h-2 w-2 rounded-full"
+                  />
+                  <AgentName
+                    agent={AGENT_BY_ROLE[role]}
+                    className="font-semibold group-data-[active=true]:text-foreground"
+                  >
                     {a.name}
-                  </span>
+                  </AgentName>
                   <span className="font-mono text-[10px] text-muted-foreground">
                     {roleCounts[role]}
                   </span>
@@ -307,7 +318,12 @@ export default function DashboardPage() {
                   <AgentBadge agent={AGENT_BY_ROLE[m.who]} size={28} />
                   <div className="flex-1">
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-[13px] font-semibold ${a.accent}`}>{a.name}</span>
+                      <AgentName
+                        agent={AGENT_BY_ROLE[m.who]}
+                        className="text-[13px] font-semibold"
+                      >
+                        {a.name}
+                      </AgentName>
                       <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] font-semibold tracking-wider text-muted-foreground">
                         {m.who}
                       </span>

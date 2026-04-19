@@ -4,7 +4,14 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 
-import { AGENTS, AgentKey, AgentOrb } from "@/components/agent-orb"
+import {
+  AGENTS,
+  AgentName,
+  AgentNodeRing,
+  AgentStatusDot,
+  AgentKey,
+  AgentOrb,
+} from "@/components/agent-orb"
 import { CodapacLogo } from "@/components/codapac-logo"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -370,8 +377,9 @@ function BotNode({
     >
       <div className="relative grid place-items-center">
         {/* outer expanding ring */}
-        <span
-          className={`pointer-events-none absolute size-[130%] rounded-full border ${a.ring.replace("ring-", "border-")} [animation:cp-ping-soft_3.4s_ease-out_infinite]`}
+        <AgentNodeRing
+          agent={agent}
+          className="pointer-events-none absolute size-[130%] rounded-full border [animation:cp-ping-soft_3.4s_ease-out_infinite]"
         />
         {/* soft backdrop halo */}
         <span
@@ -390,10 +398,10 @@ function BotNode({
 
       <div className="mt-3 grid place-items-center">
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full bg-card px-2.5 py-1 text-[11px] font-bold tracking-wide shadow-sm ring-1 ring-border ${a.accent}`}
+          className="inline-flex items-center gap-1.5 rounded-full bg-card px-2.5 py-1 text-[11px] font-bold tracking-wide shadow-sm ring-1 ring-border"
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${a.dot}`} />
-          {a.name}
+          <AgentStatusDot agent={agent} className="h-1.5 w-1.5 rounded-full" />
+          <AgentName agent={agent}>{a.name}</AgentName>
         </span>
         <span className="mt-1 text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
           {a.role} · {a.title}
