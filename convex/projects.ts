@@ -34,24 +34,8 @@ const projectPriorityValidator = v.union(
   v.literal("high"),
 )
 
-const boardToneValidator = v.union(
-  v.literal("todo"),
-  v.literal("progress"),
-  v.literal("done"),
-  v.literal("merged"),
-)
-
 type ProjectRole = "PM" | "ENG" | "QA"
-type ProjectPriority = "low" | "medium" | "high"
 type BoardTone = "todo" | "progress" | "done" | "merged"
-type BossTodoInput = {
-  title: string
-  description: string
-  acceptanceCriteria: string[]
-  labels: string[]
-  priority: ProjectPriority
-  agent: ProjectRole
-}
 
 const toneOrder: BoardTone[] = ["todo", "progress", "done", "merged"]
 
@@ -145,6 +129,7 @@ function serializeProject(project: Doc<"projects">) {
     visibility: project.visibility,
     status: project.status,
     repoUrl: project.repoUrl ?? undefined,
+    vercelProjectId: project.vercelProjectId ?? undefined,
     createdAt: project._creationTime,
     updatedAt: project.updatedAt,
     starred: project.starred,
@@ -162,22 +147,23 @@ function serializeProject(project: Doc<"projects">) {
 }
 
 function cardActivityText(cardKey: string, title: string, nextTone: BoardTone) {
+  void title
   if (nextTone === "progress") {
     return {
       who: "ENG" as const,
-      text: `Picked up ${cardKey} — pulling branch feat/${normalizeTags([title])[0] ?? "work"}.`,
+      text: `Started working on ${cardKey}.`,
     }
   }
   if (nextTone === "done") {
     return {
       who: "ENG" as const,
-      text: `Patch pushed for ${cardKey}. Moving card → Done.`,
+      text: `Finished the first pass for ${cardKey}.`,
     }
   }
   if (nextTone === "merged") {
     return {
       who: "QA" as const,
-      text: `All green on ${cardKey}. PR raised and merged.`,
+      text: `${cardKey} has been approved.`,
     }
   }
   return {
@@ -232,6 +218,18 @@ async function getPlanningJobOrThrow(
   const job = await ctx.db.get(jobId)
   if (!job || job.projectId !== projectId) {
     throw new Error("Planning job not found.")
+  }
+  return job
+}
+
+async function getProgrammerJobOrThrow(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  jobId: Id<"projectProgrammerJobs">,
+) {
+  const job = await ctx.db.get(jobId)
+  if (!job || job.projectId !== projectId) {
+    throw new Error("Programmer job not found.")
   }
   return job
 }
@@ -405,6 +403,7 @@ export const createProject = mutation({
       visibility: args.visibility ?? "private",
       status: "active",
       repoUrl: args.repoUrl?.trim() || null,
+      vercelProjectId: null,
       starred: false,
       nextCardSeq: 1,
       nextIssueSeq: 1,
@@ -495,6 +494,23 @@ export const deleteProject = mutation({
     while (true) {
       const jobs = await ctx.db
         .query("projectPlanningJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .take(128)
+
+      if (jobs.length === 0) {
+        break
+      }
+
+      for (const job of jobs) {
+        await ctx.db.delete(job._id)
+      }
+    }
+
+    while (true) {
+      const jobs = await ctx.db
+        .query("projectProgrammerJobs")
         .withIndex("by_projectId_and_updatedAt", (q) =>
           q.eq("projectId", project._id),
         )
@@ -855,6 +871,245 @@ export const failBossPlanning = mutation({
       "SYSTEM",
       `BOSS planning failed: ${message}`,
       now + 1,
+    )
+
+    return null
+  },
+})
+
+export const claimProgrammerExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    cardKey: v.string(),
+    externalRunId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const { identity, project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const cardKey = args.cardKey.trim()
+    if (!cardKey) {
+      throw new Error("Card key is required.")
+    }
+
+    const card = await getCardOrThrow(ctx, project._id, cardKey)
+    if (card.tone === "done" || card.tone === "merged") {
+      throw new Error("This task is already past active development.")
+    }
+
+    const [activeJob] = await ctx.db
+      .query("projectProgrammerJobs")
+      .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+        q.eq("projectId", project._id).eq("cardKey", card.cardKey).eq("status", "running"),
+      )
+      .order("desc")
+      .take(1)
+
+    if (activeJob) {
+      return null
+    }
+
+    const now = Date.now()
+    const jobId = await ctx.db.insert("projectProgrammerJobs", {
+      projectId: project._id,
+      ownerTokenIdentifier: identity.tokenIdentifier,
+      cardKey: card.cardKey,
+      status: "running",
+      provider: "opencode-vercel-sandbox",
+      externalRunId: args.externalRunId,
+      sandboxId: null,
+      commandId: null,
+      repoUrl: project.repoUrl,
+      vercelProjectId: project.vercelProjectId,
+      branchName: null,
+      notes: "Programmer is preparing the workspace.",
+      error: null,
+      updatedAt: now,
+    })
+
+    if (card.tone !== "progress") {
+      await ctx.db.patch(card._id, {
+        tone: "progress",
+        updatedAt: now,
+      })
+    }
+
+    await ctx.db.patch(project._id, {
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "ENG",
+      `Programmer started working on ${card.cardKey}.`,
+      now,
+    )
+
+    return {
+      jobId,
+      project: {
+        id: project._id,
+        name: project.name,
+        slug: project.slug,
+        description: project.description,
+        visibility: project.visibility,
+        repoUrl: project.repoUrl,
+        vercelProjectId: project.vercelProjectId,
+      },
+      card: {
+        cardKey: card.cardKey,
+        title: card.title,
+        description: card.description,
+        acceptanceCriteria: card.acceptanceCriteria,
+        priority: card.priority,
+        tags: card.tags,
+      },
+    }
+  },
+})
+
+export const markProgrammerExecutionStarted = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectProgrammerJobs"),
+    repoUrl: v.string(),
+    vercelProjectId: v.string(),
+    branchName: v.string(),
+    sandboxId: v.union(v.string(), v.null()),
+    commandId: v.union(v.string(), v.null()),
+    notes: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getProgrammerJobOrThrow(ctx, project._id, args.jobId)
+    if (job.status !== "running") {
+      throw new Error("Programmer job is not running.")
+    }
+
+    const now = Date.now()
+    await ctx.db.patch(job._id, {
+      repoUrl: args.repoUrl.trim(),
+      vercelProjectId: args.vercelProjectId.trim(),
+      branchName: args.branchName.trim(),
+      sandboxId: args.sandboxId,
+      commandId: args.commandId,
+      notes: args.notes.trim() || "Programmer is working on the task.",
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      repoUrl: args.repoUrl.trim() || project.repoUrl,
+      vercelProjectId: args.vercelProjectId.trim() || project.vercelProjectId,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    return null
+  },
+})
+
+export const completeProgrammerExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectProgrammerJobs"),
+    repoUrl: v.string(),
+    vercelProjectId: v.string(),
+    branchName: v.string(),
+    summary: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getProgrammerJobOrThrow(ctx, project._id, args.jobId)
+    if (job.status !== "running") {
+      throw new Error("Programmer job is not running.")
+    }
+
+    const card = await getCardOrThrow(ctx, project._id, job.cardKey)
+    const now = Date.now()
+    const nextCounts = projectCountPatch(card.tone, "done", project)
+
+    await ctx.db.patch(card._id, {
+      tone: "done",
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(job._id, {
+      status: "completed",
+      repoUrl: args.repoUrl.trim(),
+      vercelProjectId: args.vercelProjectId.trim(),
+      branchName: args.branchName.trim(),
+      notes: args.summary.trim() || "Programmer finished the task.",
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      ...nextCounts,
+      repoUrl: args.repoUrl.trim() || project.repoUrl,
+      vercelProjectId: args.vercelProjectId.trim() || project.vercelProjectId,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "ENG",
+      `Programmer finished ${card.cardKey}. It is ready for review.`,
+      now,
+    )
+
+    return null
+  },
+})
+
+export const failProgrammerExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectProgrammerJobs"),
+    repoUrl: v.union(v.string(), v.null()),
+    vercelProjectId: v.union(v.string(), v.null()),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getProgrammerJobOrThrow(ctx, project._id, args.jobId)
+    const message = args.error.trim()
+    if (!message) {
+      throw new Error("Programmer error is required.")
+    }
+
+    const card = await getCardOrThrow(ctx, project._id, job.cardKey)
+    const now = Date.now()
+
+    await ctx.db.patch(card._id, {
+      tone: "todo",
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(job._id, {
+      status: "failed",
+      repoUrl: args.repoUrl?.trim() || job.repoUrl,
+      vercelProjectId: args.vercelProjectId?.trim() || job.vercelProjectId,
+      notes: null,
+      error: message,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      repoUrl: args.repoUrl?.trim() || project.repoUrl,
+      vercelProjectId: args.vercelProjectId?.trim() || project.vercelProjectId,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "SYSTEM",
+      `Programmer could not finish ${card.cardKey}. The task is back in To Do.`,
+      now,
     )
 
     return null

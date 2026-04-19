@@ -171,7 +171,35 @@ export default function ProjectDetailPage() {
           })
         }}
         onAdvanceCard={async (cardKey) => {
-          await advanceCard({ projectId: project.id, cardKey })
+          try {
+            const card = board.cards.find((item) => item.id === cardKey)
+            if (card?.tone === "todo") {
+              const response = await fetch("/api/programmer/launch", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  projectId: project.id,
+                  cardKey,
+                }),
+              })
+
+              if (!response.ok) {
+                const payload = (await response.json().catch(() => null)) as
+                  | { error?: string }
+                  | null
+                throw new Error(payload?.error || "Failed to start Programmer.")
+              }
+              return
+            }
+
+            await advanceCard({ projectId: project.id, cardKey })
+          } catch (error) {
+            window.alert(
+              error instanceof Error ? error.message : "Failed to move the task.",
+            )
+          }
         }}
         onRegressCard={async (cardKey) => {
           await regressCard({ projectId: project.id, cardKey })

@@ -56,6 +56,16 @@ const planningProvider = v.union(
   v.literal("vercel-sandbox"),
   v.literal("manual"),
 )
+const executionStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+)
+const executionProvider = v.union(
+  v.literal("opencode-vercel-sandbox"),
+  v.literal("manual"),
+)
 
 const schema = defineSchema({
   projects: defineTable({
@@ -68,6 +78,7 @@ const schema = defineSchema({
     visibility: projectVisibility,
     status: projectStatus,
     repoUrl: v.union(v.string(), v.null()),
+    vercelProjectId: v.optional(v.union(v.string(), v.null())),
     starred: v.boolean(),
     nextCardSeq: v.number(),
     nextIssueSeq: v.number(),
@@ -123,6 +134,34 @@ const schema = defineSchema({
     .index("by_projectId_and_updatedAt", ["projectId", "updatedAt"])
     .index("by_projectId_and_status_and_updatedAt", [
       "projectId",
+      "status",
+      "updatedAt",
+    ]),
+  projectProgrammerJobs: defineTable({
+    projectId: v.id("projects"),
+    ownerTokenIdentifier: v.string(),
+    cardKey: v.string(),
+    status: executionStatus,
+    provider: executionProvider,
+    externalRunId: v.union(v.string(), v.null()),
+    sandboxId: v.union(v.string(), v.null()),
+    commandId: v.union(v.string(), v.null()),
+    repoUrl: v.union(v.string(), v.null()),
+    vercelProjectId: v.optional(v.union(v.string(), v.null())),
+    branchName: v.union(v.string(), v.null()),
+    notes: v.union(v.string(), v.null()),
+    error: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId_and_updatedAt", ["projectId", "updatedAt"])
+    .index("by_projectId_and_cardKey_and_updatedAt", [
+      "projectId",
+      "cardKey",
+      "updatedAt",
+    ])
+    .index("by_projectId_and_cardKey_and_status_and_updatedAt", [
+      "projectId",
+      "cardKey",
       "status",
       "updatedAt",
     ]),

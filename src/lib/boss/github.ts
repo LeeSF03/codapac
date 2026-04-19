@@ -34,6 +34,16 @@ function normalizeRepoName(slug: string) {
     .slice(0, 90)
 }
 
+export function getGitHubToken() {
+  const token = process.env.GITHUB_TOKEN?.trim()
+  if (!token) {
+    throw new Error(
+      "GITHUB_TOKEN is required to create or update the project repository.",
+    )
+  }
+  return token
+}
+
 function summarizeGitHubError(payload: unknown) {
   if (!payload || typeof payload !== "object") {
     return "GitHub returned an unexpected error."
@@ -116,13 +126,7 @@ async function getExistingRepository(token: string, owner: string, repo: string)
 }
 
 export async function createProjectRepository(args: CreateProjectRepositoryArgs) {
-  const token = process.env.GITHUB_TOKEN?.trim()
-  if (!token) {
-    throw new Error(
-      "GITHUB_TOKEN is required to create a repository when the project does not have a repo URL.",
-    )
-  }
-
+  const token = getGitHubToken()
   const repoName = normalizeRepoName(args.slug)
   if (!repoName) {
     throw new Error("Unable to derive a valid GitHub repository name from the project slug.")
