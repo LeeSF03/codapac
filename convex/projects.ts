@@ -28,6 +28,12 @@ const projectRoleValidator = v.union(
   v.literal("QA"),
 )
 
+const projectPriorityValidator = v.union(
+  v.literal("low"),
+  v.literal("medium"),
+  v.literal("high"),
+)
+
 const boardToneValidator = v.union(
   v.literal("todo"),
   v.literal("progress"),
@@ -36,7 +42,16 @@ const boardToneValidator = v.union(
 )
 
 type ProjectRole = "PM" | "ENG" | "QA"
+type ProjectPriority = "low" | "medium" | "high"
 type BoardTone = "todo" | "progress" | "done" | "merged"
+type BossTodoInput = {
+  title: string
+  description: string
+  acceptanceCriteria: string[]
+  labels: string[]
+  priority: ProjectPriority
+  agent: ProjectRole
+}
 
 const toneOrder: BoardTone[] = ["todo", "progress", "done", "merged"]
 
@@ -63,6 +78,13 @@ function normalizeTags(tags: string[]): string[] {
     )
     .filter((tag) => tag.length > 0)
     .slice(0, 4)
+}
+
+function normalizeAcceptanceCriteria(criteria: string[]): string[] {
+  return criteria
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 8)
 }
 
 function formatTimeLabel(timestamp: number): string {
@@ -202,6 +224,18 @@ async function getCardOrThrow(
   return card
 }
 
+async function getPlanningJobOrThrow(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  jobId: Id<"projectPlanningJobs">,
+) {
+  const job = await ctx.db.get(jobId)
+  if (!job || job.projectId !== projectId) {
+    throw new Error("Planning job not found.")
+  }
+  return job
+}
+
 async function queuePlanningJob(
   ctx: MutationCtx,
   project: Doc<"projects">,
@@ -215,9 +249,9 @@ async function queuePlanningJob(
     ownerTokenIdentifier,
     prompt,
     status: "queued",
-    provider: "vercel-sandbox",
+    provider: "hosted-boss",
     externalRunId: null,
-    notes: "Waiting for the Vercel sandbox worker to pick this up.",
+    notes: "Waiting for BOSS to pick up the planning brief.",
     error: null,
     updatedAt: now,
   })
@@ -234,7 +268,7 @@ async function queuePlanningJob(
     ctx,
     project._id,
     "SYSTEM",
-    "BOSS planning request queued. The backlog will stay empty until the sandbox worker posts cards back.",
+    "BOSS planning request queued. The backlog will stay empty until BOSS posts the generated cards back.",
     now,
   )
 }
@@ -504,8 +538,11 @@ export const createIssue = mutation({
       projectId: project._id,
       cardKey,
       title,
+      description: "",
+      acceptanceCriteria: [],
       issueNumber,
       agent,
+      priority: "medium",
       tags,
       tone: "todo",
       createdByTokenIdentifier: identity.tokenIdentifier,
@@ -532,6 +569,65 @@ export const createIssue = mutation({
   },
 })
 
+export const createIssueFromBoss = mutation({
+  args: {
+    projectId: v.id("projects"),
+    title: v.string(),
+    description: v.string(),
+    acceptanceCriteria: v.array(v.string()),
+    agent: v.union(projectRoleValidator, v.null()),
+    priority: v.union(projectPriorityValidator, v.null()),
+    tags: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { identity, project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const title = args.title.trim()
+    if (!title) {
+      throw new Error("Issue title is required.")
+    }
+
+    const now = Date.now()
+    const cardKey = `${projectPrefix(project.slug)}-${project.nextCardSeq}`
+    const issueNumber = project.nextIssueSeq
+    const agent = args.agent ?? "PM"
+    const priority = args.priority ?? "medium"
+    const tags = normalizeTags(args.tags)
+
+    await ctx.db.insert("projectCards", {
+      projectId: project._id,
+      cardKey,
+      title,
+      description: args.description.trim(),
+      acceptanceCriteria: normalizeAcceptanceCriteria(args.acceptanceCriteria),
+      issueNumber,
+      agent,
+      priority,
+      tags,
+      tone: "todo",
+      createdByTokenIdentifier: identity.tokenIdentifier,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      nextCardSeq: project.nextCardSeq + 1,
+      nextIssueSeq: project.nextIssueSeq + 1,
+      openIssueCount: project.openIssueCount + 1,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "PM",
+      `BOSS filed ${cardKey} from chat — queued in To Do.`,
+      now,
+    )
+
+    return { id: cardKey }
+  },
+})
+
 export const queueBossPlanning = mutation({
   args: {
     projectId: v.id("projects"),
@@ -545,6 +641,222 @@ export const queueBossPlanning = mutation({
     }
 
     await queuePlanningJob(ctx, project, identity.tokenIdentifier, prompt)
+    return null
+  },
+})
+
+export const claimBossPlanning = mutation({
+  args: {
+    projectId: v.id("projects"),
+    externalRunId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const [job] = await ctx.db
+      .query("projectPlanningJobs")
+      .withIndex("by_projectId_and_status_and_updatedAt", (q) =>
+        q.eq("projectId", project._id).eq("status", "queued"),
+      )
+      .order("desc")
+      .take(1)
+
+    if (!job) {
+      return null
+    }
+
+    const now = Date.now()
+    await ctx.db.patch(job._id, {
+      status: "running",
+      provider: "hosted-boss",
+      externalRunId: args.externalRunId,
+      notes: "BOSS is reviewing the product brief and preparing the initial backlog.",
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      latestPlanningStatus: "running",
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "SYSTEM",
+      "BOSS started planning the initial backlog.",
+      now,
+    )
+
+    return {
+      jobId: job._id,
+      project: {
+        id: project._id,
+        name: project.name,
+        slug: project.slug,
+        description: project.description,
+        visibility: project.visibility,
+        repoUrl: project.repoUrl,
+      },
+      prompt: job.prompt,
+    }
+  },
+})
+
+export const completeBossPlanning = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectPlanningJobs"),
+    repoUrl: v.union(v.string(), v.null()),
+    summary: v.string(),
+    todos: v.array(
+      v.object({
+        title: v.string(),
+        description: v.string(),
+        acceptanceCriteria: v.array(v.string()),
+        labels: v.array(v.string()),
+        priority: projectPriorityValidator,
+        agent: projectRoleValidator,
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { identity, project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getPlanningJobOrThrow(ctx, project._id, args.jobId)
+    if (job.status !== "running") {
+      throw new Error("Planning job is not running.")
+    }
+
+    const summary = args.summary.trim()
+    if (!summary) {
+      throw new Error("Planning summary is required.")
+    }
+
+    const now = Date.now()
+    let nextCardSeq = project.nextCardSeq
+    let nextIssueSeq = project.nextIssueSeq
+
+    for (const todo of args.todos) {
+      const title = todo.title.trim()
+      if (!title) {
+        continue
+      }
+
+      const cardKey = `${projectPrefix(project.slug)}-${nextCardSeq}`
+      const issueNumber = nextIssueSeq
+      nextCardSeq += 1
+      nextIssueSeq += 1
+
+      await ctx.db.insert("projectCards", {
+        projectId: project._id,
+        cardKey,
+        title,
+        description: todo.description.trim(),
+        acceptanceCriteria: normalizeAcceptanceCriteria(todo.acceptanceCriteria),
+        issueNumber,
+        agent: todo.agent,
+        priority: todo.priority,
+        tags: normalizeTags(todo.labels),
+        tone: "todo",
+        createdByTokenIdentifier: identity.tokenIdentifier,
+        updatedAt: now,
+      })
+    }
+
+    const createdCount = nextIssueSeq - project.nextIssueSeq
+    const normalizedRepoUrl = args.repoUrl?.trim() || null
+
+    await ctx.db.patch(job._id, {
+      status: "completed",
+      provider: "hosted-boss",
+      notes: summary,
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      repoUrl: normalizedRepoUrl ?? project.repoUrl,
+      nextCardSeq,
+      nextIssueSeq,
+      openIssueCount: project.openIssueCount + createdCount,
+      latestPlanningStatus: "completed",
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    if (normalizedRepoUrl && normalizedRepoUrl !== project.repoUrl) {
+      await appendActivity(
+        ctx,
+        project._id,
+        "SYSTEM",
+        `Repository linked: ${normalizedRepoUrl}`,
+        now,
+      )
+    }
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "PM",
+      `BOSS planned ${createdCount} backlog item${createdCount === 1 ? "" : "s"}. ${summary}`,
+      now + 1,
+    )
+
+    return { createdCount }
+  },
+})
+
+export const failBossPlanning = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectPlanningJobs"),
+    repoUrl: v.union(v.string(), v.null()),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getPlanningJobOrThrow(ctx, project._id, args.jobId)
+    const message = args.error.trim()
+    if (!message) {
+      throw new Error("Planning error is required.")
+    }
+
+    const now = Date.now()
+    const normalizedRepoUrl = args.repoUrl?.trim() || null
+
+    await ctx.db.patch(job._id, {
+      status: "failed",
+      provider: "hosted-boss",
+      notes: null,
+      error: message,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      repoUrl: normalizedRepoUrl ?? project.repoUrl,
+      latestPlanningStatus: "failed",
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    if (normalizedRepoUrl && normalizedRepoUrl !== project.repoUrl) {
+      await appendActivity(
+        ctx,
+        project._id,
+        "SYSTEM",
+        `Repository linked: ${normalizedRepoUrl}`,
+        now,
+      )
+    }
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "SYSTEM",
+      `BOSS planning failed: ${message}`,
+      now + 1,
+    )
+
     return null
   },
 })

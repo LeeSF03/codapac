@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { Streamdown } from "streamdown"
 
 import { AgentBadge } from "@/components/agent-badge"
 import {
@@ -191,6 +192,17 @@ export type ProjectBoardProps = {
   onRegressCard?: (cardId: string) => Promise<void> | void
   onDeleteCard?: (cardId: string) => Promise<void> | void
   onReset?: () => void
+  chatMessages?: Array<{
+    id: string
+    role: "user" | "assistant" | "system"
+    author: "USER" | "BOSS" | "SYSTEM"
+    content: string
+    time: string
+  }>
+  chatBusy?: boolean
+  chatPlaceholder?: string
+  chatQuickPrompts?: string[]
+  onSendChat?: (message: string) => Promise<void> | void
 }
 
 export function ProjectBoard({
@@ -208,6 +220,11 @@ export function ProjectBoard({
   onRegressCard,
   onDeleteCard,
   onReset,
+  chatMessages,
+  chatBusy,
+  chatPlaceholder,
+  chatQuickPrompts,
+  onSendChat,
 }: ProjectBoardProps = {}) {
   const localBoard = useBoard(projectId)
   const board = boardState ?? localBoard
@@ -227,6 +244,10 @@ export function ProjectBoard({
   const [forwarded, setForwarded] = useState(false)
   const [issueDialogOpen, setIssueDialogOpen] = useState(false)
   const forwardTimer = useRef<number | null>(null)
+  const chatMode = Boolean(chatMessages || onSendChat)
+  const hasStreamingMessage = Boolean(
+    chatMessages?.some((message) => message.id === "__streaming-boss"),
+  )
 
   const { data: session } = authClient.useSession()
   const displayName =
@@ -246,6 +267,16 @@ export function ProjectBoard({
 
   const handleSprintSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (chatMode) {
+      const trimmed = draft.trim()
+      if (!trimmed || !onSendChat || chatBusy) return
+      setDraft("")
+      void Promise.resolve(onSendChat(trimmed)).catch(() => {
+        setDraft(trimmed)
+      })
+      return
+    }
+
     const ok = sendChatMessage(draft, displayName)
     if (!ok) return
     setDraft("")
@@ -488,9 +519,15 @@ export function ProjectBoard({
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-500 [animation:cp-breath_2s_ease-in-out_infinite]" />
-              <h3 className="text-sm font-semibold">Sprint chat</h3>
+              <h3 className="text-sm font-semibold">
+                {chatMode ? "Project chat" : "Sprint chat"}
+              </h3>
               <span className="text-[11px] text-muted-foreground">
-                {isInteractive ? `${cards.length} card${cards.length === 1 ? "" : "s"}` : "#issue-128"}
+                {chatMode
+                  ? `${chatMessages?.length ?? 0} message${(chatMessages?.length ?? 0) === 1 ? "" : "s"}`
+                  : isInteractive
+                    ? `${cards.length} card${cards.length === 1 ? "" : "s"}`
+                    : "#issue-128"}
               </span>
             </div>
             <button type="button" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
@@ -499,24 +536,70 @@ export function ProjectBoard({
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
-            {activity.length === 0 ? (
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
-                <div className="mb-1 font-semibold text-emerald-700">Quiet sprint</div>
-                Nothing to report yet. File an issue to get the squad talking.
-              </div>
+            {chatMode ? (
+              <>
+                {chatMessages && chatMessages.length > 0 ? (
+                  <>
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+                      <div className="mb-1 font-semibold text-emerald-700">
+                        BOSS online
+                      </div>
+                      Chat with the project manager directly. Messages are saved here.
+                    </div>
+                    {chatMessages.map((message) => (
+                      <ProjectChatRow key={message.id} message={message} />
+                    ))}
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+                      <div className="mb-1 font-semibold text-emerald-700">
+                        BOSS is ready
+                      </div>
+                      Ask for goal details, task ideas, or next steps for this project.
+                    </div>
+                    {(chatQuickPrompts ?? []).map((prompt) => (
+                      <button
+                        key={prompt}
+                        type="button"
+                        onClick={() => setDraft(prompt)}
+                        className="group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-3 text-left text-[12.5px] font-medium text-foreground/90 shadow-xs transition-all hover:-translate-y-px hover:border-foreground/30 hover:shadow-md"
+                      >
+                        <span className="line-clamp-2">{prompt}</span>
+                        <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M5 12h14" />
+                          <path d="m13 6 6 6-6 6" />
+                        </svg>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {chatBusy && !hasStreamingMessage ? (
+                  <ProjectChatTyping />
+                ) : null}
+              </>
             ) : (
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
-                <div className="mb-1 font-semibold text-emerald-700">Sprint live</div>
-                {activity.length} event{activity.length === 1 ? "" : "s"} on the
-                wire. Latest at {activity[activity.length - 1].time}.
-              </div>
+              <>
+                {activity.length === 0 ? (
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+                    <div className="mb-1 font-semibold text-emerald-700">Quiet sprint</div>
+                    Nothing to report yet. File an issue to get the squad talking.
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+                    <div className="mb-1 font-semibold text-emerald-700">Sprint live</div>
+                    {activity.length} event{activity.length === 1 ? "" : "s"} on the
+                    wire. Latest at {activity[activity.length - 1].time}.
+                  </div>
+                )}
+
+                {activity.map((m) => (
+                  <ActivityRow key={m.id} entry={m} />
+                ))}
+
+                {board.typing ? <TypingIndicator who={board.typing} /> : null}
+              </>
             )}
-
-            {activity.map((m) => (
-              <ActivityRow key={m.id} entry={m} />
-            ))}
-
-            {board.typing ? <TypingIndicator who={board.typing} /> : null}
           </div>
 
           <form onSubmit={handleSprintSubmit} className="border-t border-border p-3">
@@ -531,34 +614,47 @@ export function ProjectBoard({
                   }
                 }}
                 rows={2}
-                placeholder="Paste a GitHub issue URL, or nudge a bot — @boss @fixer @testees"
+                placeholder={
+                  chatMode
+                    ? (chatPlaceholder ?? "Ask BOSS about goals, tasks, or next steps")
+                    : "Paste a GitHub issue URL, or nudge a bot — @boss @fixer @testees"
+                }
                 className="flex-1 resize-none bg-transparent text-[13px] placeholder:text-muted-foreground focus:outline-none"
               />
               <Button
                 type="submit"
                 size="sm"
                 className="h-8 shrink-0"
-                disabled={draft.trim().length === 0}
+                disabled={draft.trim().length === 0 || Boolean(chatBusy)}
               >
-                Send
+                {chatBusy ? "..." : "Send"}
               </Button>
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-              <div className="flex gap-3">
-                <button type="button" className="transition-colors hover:text-foreground">＠ mention</button>
-                <button type="button" className="transition-colors hover:text-foreground">🔗 link</button>
-                <button type="button" className="transition-colors hover:text-foreground">⌘K commands</button>
-              </div>
-              {forwarded ? (
-                <Link
-                  href={"/mock/chat" as Route}
-                  className="inline-flex items-center gap-1 font-medium text-emerald-600 transition-colors hover:text-emerald-700"
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  Sent to Squad chat →
-                </Link>
+              {chatMode ? (
+                <>
+                  <span>⌘↵ to send · saved to this project</span>
+                  <span>BOSS thread</span>
+                </>
               ) : (
-                <span>⌘↵ to send · shared with Squad chat</span>
+                <>
+                  <div className="flex gap-3">
+                    <button type="button" className="transition-colors hover:text-foreground">＠ mention</button>
+                    <button type="button" className="transition-colors hover:text-foreground">🔗 link</button>
+                    <button type="button" className="transition-colors hover:text-foreground">⌘K commands</button>
+                  </div>
+                  {forwarded ? (
+                    <Link
+                      href={"/mock/chat" as Route}
+                      className="inline-flex items-center gap-1 font-medium text-emerald-600 transition-colors hover:text-emerald-700"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      Sent to Squad chat →
+                    </Link>
+                  ) : (
+                    <span>⌘↵ to send · shared with Squad chat</span>
+                  )}
+                </>
               )}
             </div>
           </form>
@@ -574,6 +670,87 @@ export function ProjectBoard({
         />
       ) : null}
     </>
+  )
+}
+
+function ProjectChatRow({
+  message,
+}: {
+  message: {
+    role: "user" | "assistant" | "system"
+    author: "USER" | "BOSS" | "SYSTEM"
+    content: string
+    time: string
+  }
+}) {
+  if (message.role === "system" || message.author === "SYSTEM") {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground">
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-wider">
+            system
+          </span>
+          <span className="ml-auto font-mono text-[10px]">{message.time}</span>
+        </div>
+        <div className="mt-0.5 leading-snug [&_a]:underline [&_li]:my-0.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_strong]:font-semibold [&_ul]:ml-4 [&_ul]:list-disc">
+          <Streamdown>{message.content}</Streamdown>
+        </div>
+      </div>
+    )
+  }
+
+  if (message.role === "user" || message.author === "USER") {
+    return (
+      <div className="flex gap-2.5 rounded-lg px-1 py-0.5">
+        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-foreground text-[10px] font-bold text-background">
+          YOU
+        </span>
+        <div className="flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[13px] font-semibold">You</span>
+            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+              {message.time}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">
+            {message.content}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="group flex gap-2.5 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted/40">
+      <AgentBadge agent="priya" size={28} />
+      <div className="flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[13px] font-semibold">BOSS</span>
+          <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] font-semibold tracking-wider text-muted-foreground">
+            PM
+          </span>
+          <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+            {message.time}
+          </span>
+        </div>
+        <div className="mt-0.5 text-[13px] leading-snug text-foreground/90 [&_a]:underline [&_li]:my-0.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_strong]:font-semibold [&_ul]:ml-4 [&_ul]:list-disc">
+          <Streamdown>{message.content}</Streamdown>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ProjectChatTyping() {
+  return (
+    <div className="flex items-center gap-2 pl-[38px] text-[11px] text-muted-foreground">
+      <span className="flex gap-0.5">
+        <span className="h-1 w-1 animate-bounce rounded-full bg-amber-500 [animation-delay:0ms]" />
+        <span className="h-1 w-1 animate-bounce rounded-full bg-amber-500 [animation-delay:120ms]" />
+        <span className="h-1 w-1 animate-bounce rounded-full bg-amber-500 [animation-delay:240ms]" />
+      </span>
+      <span className="font-semibold">BOSS</span> is typing…
+    </div>
   )
 }
 

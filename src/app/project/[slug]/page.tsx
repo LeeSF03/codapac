@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect, useRef, useState } from "react"
+
 import type { Route } from "next"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
@@ -9,23 +11,21 @@ import { useMutation, useQuery } from "convex/react"
 import { ProjectBoard } from "@/components/project-board"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
-import { authClient } from "@/lib/auth-client"
 import { projectColor } from "@/lib/mock-projects"
 import { api } from "~/convex/_generated/api"
-import type { Id } from "~/convex/_generated/dataModel"
 
 function planningMessage(status: string) {
   if (status === "queued") {
-    return "BOSS planning is queued. The todo column will stay empty until the sandbox worker posts the generated cards."
+    return "BOSS is getting the first set of tasks ready."
   }
   if (status === "running") {
-    return "BOSS is planning the backlog now. Refreshing is not required; cards will appear as they are written."
+    return "BOSS is planning the first tasks now. They will appear here automatically."
   }
   if (status === "failed" || status === "blocked") {
-    return "The latest BOSS planning request needs attention before cards can be created."
+    return "BOSS needs attention before tasks can be created."
   }
   if (status === "completed") {
-    return "BOSS has already generated a backlog for this project."
+    return "BOSS has already created the first task list for this project."
   }
   return null
 }
@@ -34,12 +34,16 @@ export default function ProjectDetailPage() {
   const router = useRouter()
   const params = useParams<{ slug: string }>()
   const slug = Array.isArray(params?.slug) ? params.slug[0] : params?.slug
+  const launchRef = useRef<string | null>(null)
 
-  const { data: session, isPending } = authClient.useSession()
   const projects = useQuery(api.projects.listForViewer, {})
   const project = useQuery(
     api.projects.getBySlug,
     slug ? { slug } : "skip",
+  )
+  const chatMessages = useQuery(
+    api.projectChat.listMessages,
+    project ? { projectId: project.id } : "skip",
   )
   const board = useQuery(
     api.projects.getBoard,
@@ -52,12 +56,35 @@ export default function ProjectDetailPage() {
   const advanceCard = useMutation(api.projects.advanceCard)
   const regressCard = useMutation(api.projects.regressCard)
   const removeCard = useMutation(api.projects.deleteCard)
+  const queueBossPlanning = useMutation(api.projects.queueBossPlanning)
   const convexAuthPending = projects === null
+  const [chatBusy, setChatBusy] = useState(false)
+  const [streamingReply, setStreamingReply] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!project || project.planning.status !== "queued") {
+      return
+    }
+
+    const signature = `${project.id}:${project.planning.requestedAt ?? 0}`
+    if (launchRef.current === signature) {
+      return
+    }
+    launchRef.current = signature
+
+    void fetch("/api/boss/launch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ projectId: project.id }),
+    })
+  }, [project])
 
   if (
-    isPending ||
     projects === undefined ||
     project === undefined ||
+    chatMessages === undefined ||
     board === undefined ||
     convexAuthPending
   ) {
@@ -107,6 +134,19 @@ export default function ProjectDetailPage() {
 
   const accent = projectColor(project.color)
   const planning = planningMessage(project.planning.status)
+  const visibleChatMessages =
+    streamingReply !== null
+      ? [
+          ...chatMessages,
+          {
+            id: "__streaming-boss",
+            role: "assistant" as const,
+            author: "BOSS" as const,
+            content: streamingReply,
+            time: "now",
+          },
+        ]
+      : chatMessages
 
   return (
     <div className="min-h-dvh bg-background">
@@ -120,7 +160,7 @@ export default function ProjectDetailPage() {
         issueHrefForCard={() => null}
         emptyTodoMessage={
           planning ??
-          "No work queued yet — create an issue or enqueue a BOSS planning run."
+          "No tasks yet. Ask BOSS what should happen next."
         }
         onCreateIssue={async (input) => {
           await createIssue({
@@ -138,6 +178,69 @@ export default function ProjectDetailPage() {
         }}
         onDeleteCard={async (cardKey) => {
           await removeCard({ projectId: project.id, cardKey })
+        }}
+        chatMessages={visibleChatMessages}
+        chatBusy={chatBusy}
+        chatPlaceholder="Ask BOSS to clarify the goal, prioritise work, or suggest the next move."
+        chatQuickPrompts={[
+          "Summarize this project and tell me the best first milestone.",
+          "Given the current board, what should BOSS prioritize next?",
+          "What details are still unclear from this project brief?",
+        ]}
+        onSendChat={async (message) => {
+          setChatBusy(true)
+          setStreamingReply(null)
+          let completedStream = false
+          try {
+            const response = await fetch("/api/project/chat", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                projectId: project.id,
+                message,
+              }),
+            })
+
+            if (!response.ok) {
+              const payload = (await response.json().catch(() => null)) as
+                | { error?: string }
+                | null
+              throw new Error(payload?.error || "Failed to send project chat message.")
+            }
+
+            if (!response.body) {
+              throw new Error("Project chat response did not include a stream.")
+            }
+
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let streamedText = ""
+
+            while (true) {
+              const { value, done } = await reader.read()
+              if (done) break
+              streamedText += decoder.decode(value, { stream: true })
+              setStreamingReply(streamedText)
+            }
+
+            streamedText += decoder.decode()
+            setStreamingReply(streamedText)
+            completedStream = true
+          } catch (error) {
+            setStreamingReply(null)
+            window.alert(
+              error instanceof Error
+                ? error.message
+                : "Failed to send project chat message.",
+            )
+          } finally {
+            setChatBusy(false)
+            if (completedStream) {
+              window.setTimeout(() => setStreamingReply(null), 250)
+            }
+          }
         }}
         eyebrow={
           <span className="inline-flex items-center gap-2">
@@ -190,6 +293,23 @@ export default function ProjectDetailPage() {
               </span>
             </div>
             <div className="flex items-center gap-1.5">
+              {project.planning.prompt &&
+              project.planning.status !== "queued" &&
+              project.planning.status !== "running" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() =>
+                    queueBossPlanning({
+                      projectId: project.id,
+                      prompt: project.planning.prompt ?? "",
+                    })
+                  }
+                >
+                  Run BOSS
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
