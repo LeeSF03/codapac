@@ -154,7 +154,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-background">
-      <SiteHeader fullBleed />
+      <SiteHeader />
       <div className="flex min-h-0 flex-1">
         <Sidebar
           hydrated={hydrated}

@@ -1,5 +1,6 @@
 "use client"
 
+import type { Route } from "next"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
@@ -59,7 +60,7 @@ export default function UsernamePage() {
     if (!canSubmit) return
     setSubmitting(true)
     setTimeout(() => {
-      router.push("/dashboard")
+      router.push("/project" as Route)
     }, 500)
   }
 

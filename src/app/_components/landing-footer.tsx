@@ -1,3 +1,4 @@
+import type { Route } from "next"
 import Link from "next/link"
 
 export function LandingFooter() {
@@ -16,7 +17,7 @@ export function LandingFooter() {
           </span>
         </div>
         <div className="flex items-center gap-5">
-          <Link href="/dashboard" className="hover:text-foreground transition-colors">
+          <Link href={"/project" as Route} className="hover:text-foreground transition-colors">
             Board
           </Link>
           <Link

@@ -1,3 +1,4 @@
+import type { Route } from "next"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
@@ -46,7 +47,7 @@ export function HeroSection() {
               size="lg"
               className="h-11 px-5 text-[15px] font-medium transition-all hover:-translate-y-px"
             >
-              <Link href="/dashboard">See the live board</Link>
+              <Link href={"/project" as Route}>See the live board</Link>
             </Button>
           </div>
 

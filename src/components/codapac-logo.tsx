@@ -1,3 +1,4 @@
+import type { Route } from "next"
 import Link from "next/link"
 
 import { cn } from "@/lib/utils"
@@ -117,7 +118,7 @@ export function CodapacLogo({
 }) {
   return (
     <Link
-      href={href}
+      href={href as Route}
       aria-label={ariaLabel}
       className={cn(
         "group flex shrink-0 items-center gap-3 transition-transform hover:-translate-y-px",
