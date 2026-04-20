@@ -118,7 +118,10 @@ async function appendActivity(
   })
 }
 
-function serializeProject(project: Doc<"projects">) {
+function serializeProject(
+  project: Doc<"projects">,
+  latestPreviewDeploymentUrl?: string | null,
+) {
   return {
     id: project._id,
     name: project.name,
@@ -130,6 +133,7 @@ function serializeProject(project: Doc<"projects">) {
     status: project.status,
     repoUrl: project.repoUrl ?? undefined,
     vercelProjectId: project.vercelProjectId ?? undefined,
+    latestPreviewDeploymentUrl: latestPreviewDeploymentUrl ?? undefined,
     createdAt: project._creationTime,
     updatedAt: project.updatedAt,
     starred: project.starred,
@@ -234,6 +238,18 @@ async function getProgrammerJobOrThrow(
   return job
 }
 
+async function getQaJobOrThrow(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  jobId: Id<"projectQaJobs">,
+) {
+  const job = await ctx.db.get(jobId)
+  if (!job || job.projectId !== projectId) {
+    throw new Error("QA job not found.")
+  }
+  return job
+}
+
 async function queuePlanningJob(
   ctx: MutationCtx,
   project: Doc<"projects">,
@@ -287,7 +303,7 @@ export const listForViewer = query({
       .order("desc")
       .take(100)
 
-    return projects.map(serializeProject)
+    return projects.map((project) => serializeProject(project))
   },
 })
 
@@ -306,7 +322,24 @@ export const getBySlug = query({
       )
       .unique()
 
-    return project ? serializeProject(project) : null
+    if (!project) {
+      return null
+    }
+
+    const [latestQaJob] = await ctx.db
+      .query("projectQaJobs")
+      .withIndex("by_projectId_and_updatedAt", (q) =>
+        q.eq("projectId", project._id),
+      )
+      .order("desc")
+      .take(1)
+
+    return serializeProject(
+      project,
+      latestQaJob?.status === "completed"
+        ? latestQaJob.previewDeploymentUrl
+        : null,
+    )
   },
 })
 
@@ -511,6 +544,23 @@ export const deleteProject = mutation({
     while (true) {
       const jobs = await ctx.db
         .query("projectProgrammerJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .take(128)
+
+      if (jobs.length === 0) {
+        break
+      }
+
+      for (const job of jobs) {
+        await ctx.db.delete(job._id)
+      }
+    }
+
+    while (true) {
+      const jobs = await ctx.db
+        .query("projectQaJobs")
         .withIndex("by_projectId_and_updatedAt", (q) =>
           q.eq("projectId", project._id),
         )
@@ -1109,6 +1159,230 @@ export const failProgrammerExecution = mutation({
       project._id,
       "SYSTEM",
       `Programmer could not finish ${card.cardKey}. The task is back in To Do.`,
+      now,
+    )
+
+    return null
+  },
+})
+
+export const claimQaExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    cardKey: v.string(),
+    externalRunId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const { identity, project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const cardKey = args.cardKey.trim()
+    if (!cardKey) {
+      throw new Error("Card key is required.")
+    }
+
+    const card = await getCardOrThrow(ctx, project._id, cardKey)
+    if (card.tone !== "done") {
+      throw new Error("QA can only review tasks that are ready for review.")
+    }
+
+    const [activeJob] = await ctx.db
+      .query("projectQaJobs")
+      .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+        q.eq("projectId", project._id).eq("cardKey", card.cardKey).eq("status", "running"),
+      )
+      .order("desc")
+      .take(1)
+
+    if (activeJob) {
+      return null
+    }
+
+    const [programmerJob] = await ctx.db
+      .query("projectProgrammerJobs")
+      .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+        q
+          .eq("projectId", project._id)
+          .eq("cardKey", card.cardKey)
+          .eq("status", "completed"),
+      )
+      .order("desc")
+      .take(1)
+
+    if (!programmerJob?.repoUrl || !programmerJob.branchName) {
+      throw new Error("No completed Programmer branch found for this task.")
+    }
+
+    const vercelProjectId = programmerJob.vercelProjectId ?? project.vercelProjectId
+    if (!vercelProjectId) {
+      throw new Error("No Vercel project is linked to this task yet.")
+    }
+
+    const now = Date.now()
+    const jobId = await ctx.db.insert("projectQaJobs", {
+      projectId: project._id,
+      ownerTokenIdentifier: identity.tokenIdentifier,
+      cardKey: card.cardKey,
+      status: "running",
+      provider: "opencode-integration-vercel-sandbox",
+      externalRunId: args.externalRunId,
+      sandboxId: null,
+      commandId: null,
+      repoUrl: programmerJob.repoUrl,
+      vercelProjectId,
+      branchName: programmerJob.branchName,
+      previewDeploymentUrl: null,
+      notes: "QA is preparing integration checks.",
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      repoUrl: programmerJob.repoUrl,
+      vercelProjectId,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "QA",
+      `QA started checking ${card.cardKey}.`,
+      now,
+    )
+
+    return {
+      jobId,
+      project: {
+        id: project._id,
+        name: project.name,
+        slug: project.slug,
+        description: project.description,
+        visibility: project.visibility,
+        repoUrl: programmerJob.repoUrl,
+        vercelProjectId,
+      },
+      card: {
+        cardKey: card.cardKey,
+        title: card.title,
+        description: card.description,
+        acceptanceCriteria: card.acceptanceCriteria,
+        priority: card.priority,
+        tags: card.tags,
+      },
+      branchName: programmerJob.branchName,
+    }
+  },
+})
+
+export const markQaExecutionStarted = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectQaJobs"),
+    sandboxId: v.union(v.string(), v.null()),
+    commandId: v.union(v.string(), v.null()),
+    notes: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getQaJobOrThrow(ctx, project._id, args.jobId)
+    if (job.status !== "running") {
+      throw new Error("QA job is not running.")
+    }
+
+    await ctx.db.patch(job._id, {
+      sandboxId: args.sandboxId,
+      commandId: args.commandId,
+      notes: args.notes.trim() || "QA is running integration checks.",
+      error: null,
+      updatedAt: Date.now(),
+    })
+
+    return null
+  },
+})
+
+export const completeQaExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectQaJobs"),
+    previewDeploymentUrl: v.string(),
+    summary: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getQaJobOrThrow(ctx, project._id, args.jobId)
+    if (job.status !== "running") {
+      throw new Error("QA job is not running.")
+    }
+
+    const card = await getCardOrThrow(ctx, project._id, job.cardKey)
+    const now = Date.now()
+    const nextCounts = projectCountPatch(card.tone, "merged", project)
+    const previewDeploymentUrl = args.previewDeploymentUrl.trim()
+
+    await ctx.db.patch(card._id, {
+      tone: "merged",
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(job._id, {
+      status: "completed",
+      previewDeploymentUrl,
+      notes: args.summary.trim() || "QA passed integration checks.",
+      error: null,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      ...nextCounts,
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "QA",
+      `QA approved ${card.cardKey}. Preview is ready.`,
+      now,
+    )
+
+    return null
+  },
+})
+
+export const failQaExecution = mutation({
+  args: {
+    projectId: v.id("projects"),
+    jobId: v.id("projectQaJobs"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const job = await getQaJobOrThrow(ctx, project._id, args.jobId)
+    const message = args.error.trim()
+    if (!message) {
+      throw new Error("QA error is required.")
+    }
+
+    const now = Date.now()
+    await ctx.db.patch(job._id, {
+      status: "failed",
+      notes: null,
+      error: message,
+      updatedAt: now,
+    })
+
+    await ctx.db.patch(project._id, {
+      updatedAt: now,
+      lastActivityAt: now,
+    })
+
+    await appendActivity(
+      ctx,
+      project._id,
+      "QA",
+      `QA found issues in ${job.cardKey}. The task is still waiting for review.`,
       now,
     )
 

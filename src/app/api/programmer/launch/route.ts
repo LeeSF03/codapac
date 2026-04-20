@@ -63,6 +63,7 @@ export async function POST(request: Request) {
     const vercelProject = await ensureVercelProject({
       name: claim.project.name,
       slug: claim.project.slug,
+      repoUrl,
     })
     vercelProjectId = vercelProject.id
     const readyRepoUrl = repoUrl

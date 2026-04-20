@@ -66,6 +66,10 @@ const executionProvider = v.union(
   v.literal("opencode-vercel-sandbox"),
   v.literal("manual"),
 )
+const qaProvider = v.union(
+  v.literal("opencode-integration-vercel-sandbox"),
+  v.literal("manual"),
+)
 
 const schema = defineSchema({
   projects: defineTable({
@@ -149,6 +153,35 @@ const schema = defineSchema({
     repoUrl: v.union(v.string(), v.null()),
     vercelProjectId: v.optional(v.union(v.string(), v.null())),
     branchName: v.union(v.string(), v.null()),
+    notes: v.union(v.string(), v.null()),
+    error: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+  })
+    .index("by_projectId_and_updatedAt", ["projectId", "updatedAt"])
+    .index("by_projectId_and_cardKey_and_updatedAt", [
+      "projectId",
+      "cardKey",
+      "updatedAt",
+    ])
+    .index("by_projectId_and_cardKey_and_status_and_updatedAt", [
+      "projectId",
+      "cardKey",
+      "status",
+      "updatedAt",
+    ]),
+  projectQaJobs: defineTable({
+    projectId: v.id("projects"),
+    ownerTokenIdentifier: v.string(),
+    cardKey: v.string(),
+    status: executionStatus,
+    provider: qaProvider,
+    externalRunId: v.union(v.string(), v.null()),
+    sandboxId: v.union(v.string(), v.null()),
+    commandId: v.union(v.string(), v.null()),
+    repoUrl: v.union(v.string(), v.null()),
+    vercelProjectId: v.optional(v.union(v.string(), v.null())),
+    branchName: v.union(v.string(), v.null()),
+    previewDeploymentUrl: v.union(v.string(), v.null()),
     notes: v.union(v.string(), v.null()),
     error: v.union(v.string(), v.null()),
     updatedAt: v.number(),

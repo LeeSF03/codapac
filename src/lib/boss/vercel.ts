@@ -3,6 +3,10 @@
 type VercelProject = {
   id: string
   name: string
+  link?: {
+    type?: string
+    repo?: string
+  } | null
 }
 
 type VercelError = {
@@ -15,9 +19,10 @@ type VercelError = {
 type EnsureVercelProjectArgs = {
   name: string
   slug: string
+  repoUrl?: string | null
 }
 
-function getVercelToken() {
+export function getVercelToken() {
   const token = process.env.VERCEL_TOKEN?.trim()
   if (!token) {
     throw new Error("VERCEL_TOKEN is required to create a Vercel project.")
@@ -51,6 +56,15 @@ function normalizeProjectName(slug: string, name: string) {
     .slice(0, 80)
 
   return `codapac-${normalized || Date.now().toString(36)}`.slice(0, 100)
+}
+
+function parseGitHubRepoPath(repoUrl: string) {
+  const url = new URL(repoUrl)
+  const path = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "")
+  if (!path || path.split("/").length < 2) {
+    throw new Error("Project repository URL is not a valid GitHub repository URL.")
+  }
+  return path
 }
 
 function summarizeVercelError(payload: unknown) {
@@ -96,6 +110,39 @@ async function findVercelProject(token: string, teamId: string, name: string) {
   throw new Error(`Unable to read the Vercel project: ${response.error}`)
 }
 
+async function linkVercelProjectToGitHub(
+  token: string,
+  teamId: string,
+  projectIdOrName: string,
+  repoUrl?: string | null,
+) {
+  if (!repoUrl) return
+
+  const repo = parseGitHubRepoPath(repoUrl)
+  const url = new URL(
+    `https://api.vercel.com/v9/projects/${encodeURIComponent(projectIdOrName)}`,
+  )
+  url.searchParams.set("teamId", teamId)
+
+  const response = await vercelJson<VercelProject>(url.toString(), {
+    method: "PATCH",
+    headers: vercelHeaders(token),
+    body: JSON.stringify({
+      gitRepository: {
+        type: "github",
+        repo,
+      },
+    }),
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    // Git linking depends on the Vercel GitHub integration being installed.
+    // Source-based preview deploys still work, so this should not block agents.
+    console.warn(`Unable to link Vercel project to GitHub: ${response.error}`)
+  }
+}
+
 export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
   const token = getVercelToken()
   const teamId = getVercelTeamId()
@@ -103,6 +150,10 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
 
   const existing = await findVercelProject(token, teamId, projectName)
   if (existing) {
+    if (args.repoUrl && existing.link?.repo !== parseGitHubRepoPath(args.repoUrl)) {
+      await linkVercelProjectToGitHub(token, teamId, existing.id, args.repoUrl)
+    }
+
     return {
       id: existing.id,
       name: existing.name,
@@ -119,7 +170,14 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
     headers: vercelHeaders(token),
     body: JSON.stringify({
       name: projectName,
-      skipGitConnectDuringLink: true,
+      ...(args.repoUrl
+        ? {
+            gitRepository: {
+              type: "github",
+              repo: parseGitHubRepoPath(args.repoUrl),
+            },
+          }
+        : { skipGitConnectDuringLink: true }),
     }),
     cache: "no-store",
   })
@@ -133,9 +191,36 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
     }
   }
 
+  if (args.repoUrl && created.status === 400) {
+    console.warn(`Unable to create a Git-linked Vercel project: ${created.error}`)
+
+    const fallback = await vercelJson<VercelProject>(url.toString(), {
+      method: "POST",
+      headers: vercelHeaders(token),
+      body: JSON.stringify({
+        name: projectName,
+        skipGitConnectDuringLink: true,
+      }),
+      cache: "no-store",
+    })
+
+    if (fallback.ok) {
+      await linkVercelProjectToGitHub(token, teamId, fallback.data.id, args.repoUrl)
+
+      return {
+        id: fallback.data.id,
+        name: fallback.data.name,
+        teamId,
+        token,
+      }
+    }
+  }
+
   if (created.status === 409 || created.status === 400) {
     const raced = await findVercelProject(token, teamId, projectName)
     if (raced) {
+      await linkVercelProjectToGitHub(token, teamId, raced.id, args.repoUrl)
+
       return {
         id: raced.id,
         name: raced.name,

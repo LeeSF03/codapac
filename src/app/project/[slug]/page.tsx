@@ -194,6 +194,27 @@ export default function ProjectDetailPage() {
               return
             }
 
+            if (card?.tone === "done") {
+              const response = await fetch("/api/qa/launch", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  projectId: project.id,
+                  cardKey,
+                }),
+              })
+
+              if (!response.ok) {
+                const payload = (await response.json().catch(() => null)) as
+                  | { error?: string }
+                  | null
+                throw new Error(payload?.error || "Failed to start QA.")
+              }
+              return
+            }
+
             await advanceCard({ projectId: project.id, cardKey })
           } catch (error) {
             window.alert(
@@ -290,6 +311,19 @@ export default function ProjectDetailPage() {
         }
         description={
           <div className="space-y-1">
+            {project.latestPreviewDeploymentUrl ? (
+              <p className="text-xs text-muted-foreground">
+                <span>deployed at </span>
+                <a
+                  href={project.latestPreviewDeploymentUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-emerald-700 underline-offset-4 transition-colors hover:text-emerald-800 hover:underline"
+                >
+                  {project.latestPreviewDeploymentUrl.replace(/^https?:\/\//, "")}
+                </a>
+              </p>
+            ) : null}
             {project.description ? (
               <p>{project.description}</p>
             ) : (

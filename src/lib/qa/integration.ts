@@ -1,0 +1,475 @@
+"server-only"
+
+import { Sandbox } from "@vercel/sandbox"
+
+import { getGitHubToken } from "@/lib/boss/github"
+import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
+import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
+
+const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
+const OPENCODE_CONFIG_PATH = "/tmp/codapac-qa-opencode.json"
+const INTEGRATION_SCRIPT_PATH = "/tmp/codapac-run-integration.sh"
+const SANDBOX_TIMEOUT_MS = 45 * 60 * 1000
+const WORKDIR = "/vercel/sandbox"
+
+type QaProject = {
+  name: string
+  slug: string
+  description: string
+  repoUrl: string
+  vercelProjectId: string
+}
+
+type QaCard = {
+  cardKey: string
+  title: string
+  description: string
+  acceptanceCriteria: string[]
+  priority: "low" | "medium" | "high"
+  tags: string[]
+}
+
+type QaRunInput = {
+  externalRunId: string
+  project: QaProject
+  card: QaCard
+  branchName: string
+  onStarted?: (details: {
+    sandboxId: string
+    commandId: string | null
+  }) => Promise<void>
+}
+
+function parseGitHubRepoPath(repoUrl: string) {
+  const url = new URL(repoUrl)
+  const path = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "")
+  if (!path || path.split("/").length < 2) {
+    throw new Error("Project repository URL is not a valid GitHub repository URL.")
+  }
+  return path
+}
+
+function authenticatedRepoUrl(repoUrl: string, token: string) {
+  const repoPath = parseGitHubRepoPath(repoUrl)
+  return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repoPath}.git`
+}
+
+function gitSourceUrl(repoUrl: string) {
+  const repoPath = parseGitHubRepoPath(repoUrl)
+  return `https://github.com/${repoPath}.git`
+}
+
+function opencodeModelId(providerId: string, kimiModel: string) {
+  return `${providerId}/${kimiModel}`
+}
+
+function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
+  const providerId = "moonshot"
+
+  return JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      enabled_providers: [providerId],
+      provider: {
+        [providerId]: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Moonshot AI",
+          options: {
+            apiKey: kimiToken,
+            baseURL: "https://api.moonshot.ai/v1",
+          },
+          models: {
+            [kimiModel]: {
+              name: `Kimi ${kimiModel}`,
+            },
+          },
+        },
+      },
+      model: opencodeModelId(providerId, kimiModel),
+    },
+    null,
+    2,
+  )
+}
+
+function buildQaPrompt(project: QaProject, card: QaCard) {
+  const criteria =
+    card.acceptanceCriteria.length > 0
+      ? card.acceptanceCriteria.map((item) => `- ${item}`).join("\n")
+      : "- The requested result is visible and ready to review."
+
+  return [
+    "You are the QA agent for this repository.",
+    "Write integration tests for exactly one completed task.",
+    "Do not write browser, end-to-end, Playwright, visual, or video-recording tests yet.",
+    "Prefer the repository's existing test framework. If no integration test setup exists, add a minimal integration test setup and a package script named test:integration.",
+    "Keep tests deterministic and local. Do not require external services, secrets, paid APIs, or production credentials.",
+    "Do not merge branches. Do not deploy. Do not commit or push. The host application handles git and preview deployment after tests pass.",
+    "",
+    `Project: ${project.name}`,
+    `Project goal: ${project.description || "(none provided)"}`,
+    "",
+    `Task: ${card.cardKey} - ${card.title}`,
+    `Priority: ${card.priority}`,
+    `Labels: ${card.tags.length > 0 ? card.tags.join(", ") : "none"}`,
+    "",
+    "Task description:",
+    card.description || card.title,
+    "",
+    "Acceptance checklist:",
+    criteria,
+    "",
+    "When done, summarize the integration test files or scripts you added.",
+  ].join("\n")
+}
+
+function buildIntegrationScript() {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ ! -f package.json ]; then
+  echo "No package.json found. QA integration tests need a JavaScript project root."
+  exit 42
+fi
+
+if [ -f bun.lock ] || [ -f bun.lockb ]; then
+  bun install --frozen-lockfile || bun install
+  RUN_CMD=(bun run)
+elif [ -f pnpm-lock.yaml ]; then
+  corepack enable
+  pnpm install --frozen-lockfile || pnpm install
+  RUN_CMD=(pnpm run)
+elif [ -f yarn.lock ]; then
+  corepack enable
+  yarn install --immutable || yarn install --frozen-lockfile || yarn install
+  RUN_CMD=(yarn)
+elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+  npm ci || npm install
+  RUN_CMD=(npm run)
+else
+  npm install
+  RUN_CMD=(npm run)
+fi
+
+SCRIPT_NAME="$(node - <<'NODE'
+const scripts = require("./package.json").scripts || {};
+const candidates = [
+  "test:integration",
+  "integration",
+  "test:integrations",
+  "integrations",
+  "test:int",
+  "int:test"
+];
+const found = candidates.find((name) => scripts[name]);
+if (!found) {
+  console.error("No integration test script found. QA expected a package script named test:integration or integration.");
+  process.exit(42);
+}
+console.log(found);
+NODE
+)"
+
+"\${RUN_CMD[@]}" "$SCRIPT_NAME"
+`
+}
+
+function buildVercelProjectConfig(projectId: string, teamId: string) {
+  return JSON.stringify({ projectId, orgId: teamId }, null, 2)
+}
+
+function extractPreviewUrl(output: string) {
+  const urls = output.match(/https:\/\/[^\s]+/g) ?? []
+  return urls.find((url) => url.includes("vercel.app")) ?? urls.at(-1) ?? null
+}
+
+async function assertCommand(
+  command: Awaited<ReturnType<Sandbox["runCommand"]>>,
+  label: string,
+) {
+  if ("exitCode" in command && command.exitCode === 0) {
+    return
+  }
+
+  const stderr = "stderr" in command ? await command.stderr() : ""
+  const stdout = "stdout" in command ? await command.stdout() : ""
+  const details = redactSensitiveOutput([stderr, stdout].filter(Boolean).join("\n"))
+    .slice(0, 1_500)
+  throw new Error(`${label} failed.${details ? ` ${details}` : ""}`)
+}
+
+function redactSensitiveOutput(value: string) {
+  const secrets = [
+    process.env.GITHUB_TOKEN,
+    process.env.KIMI_TOKEN,
+    process.env.MOONSHOT_API_KEY,
+    process.env.VERCEL_TOKEN,
+  ]
+    .map((secret) => secret?.trim())
+    .filter((secret): secret is string => Boolean(secret))
+
+  return secrets.reduce(
+    (text, secret) => text.split(secret).join("[redacted]"),
+    value,
+  )
+}
+
+function describeSandboxError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return error instanceof Error ? error.message : String(error)
+  }
+
+  const message = error instanceof Error ? error.message : "Sandbox API error"
+  const details = [
+    "text" in error && typeof error.text === "string" ? error.text : null,
+    "json" in error ? JSON.stringify(error.json) : null,
+  ]
+    .filter((detail): detail is string => Boolean(detail))
+    .join(" ")
+
+  const safeDetails = redactSensitiveOutput(details).slice(0, 1_500)
+  return safeDetails ? `${message}. ${safeDetails}` : message
+}
+
+async function sandboxStep<T>(label: string, operation: () => Promise<T>) {
+  try {
+    return await operation()
+  } catch (error) {
+    throw new Error(`${label} failed. ${describeSandboxError(error)}`)
+  }
+}
+
+export async function runQaIntegration(input: QaRunInput) {
+  const githubToken = getGitHubToken()
+  const kimiToken = getKimiToken()
+  const kimiModel = getKimiModel()
+  const vercelToken = getVercelToken()
+  const vercelTeamId = getVercelTeamId()
+  const modelId = opencodeModelId("moonshot", kimiModel)
+  const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
+  const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
+
+  const sandbox = await sandboxStep("Creating the QA sandbox", () =>
+    Sandbox.create({
+      token: vercelToken,
+      teamId: vercelTeamId,
+      projectId: input.project.vercelProjectId,
+      runtime: "node22",
+      source: {
+        type: "git",
+        url: sourceRepoUrl,
+        username: "x-access-token",
+        password: githubToken,
+        revision: input.branchName,
+        depth: 1,
+      },
+      timeout: SANDBOX_TIMEOUT_MS,
+      resources: { vcpus: 2 },
+    }),
+  )
+
+  try {
+    await assertCommand(
+      await sandboxStep("Checking out the QA branch", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["checkout", "-B", input.branchName],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Checking out the QA branch",
+    )
+
+    await input.onStarted?.({
+      sandboxId: sandbox.sandboxId,
+      commandId: null,
+    })
+
+    await assertCommand(
+      await sandboxStep("Installing OpenCode", () =>
+        sandbox.runCommand({
+          cmd: "bash",
+          args: ["-lc", "curl -fsSL https://opencode.ai/install | bash"],
+          env: {
+            OPENCODE_INSTALL_DIR: "/home/vercel-sandbox/.opencode/bin",
+          },
+        }),
+      ),
+      "Installing OpenCode",
+    )
+
+    await assertCommand(
+      await sandboxStep("Preparing QA files", () =>
+        sandbox.runCommand({
+          cmd: "mkdir",
+          args: ["-p", "/tmp", ".vercel"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Preparing QA files",
+    )
+
+    await sandboxStep("Writing QA config files", () =>
+      sandbox.writeFiles([
+        {
+          path: OPENCODE_CONFIG_PATH,
+          content: Buffer.from(buildOpencodeConfig(kimiToken, kimiModel)),
+        },
+        {
+          path: INTEGRATION_SCRIPT_PATH,
+          content: Buffer.from(buildIntegrationScript()),
+          mode: 0o755,
+        },
+        {
+          path: `${WORKDIR}/.vercel/project.json`,
+          content: Buffer.from(
+            buildVercelProjectConfig(input.project.vercelProjectId, vercelTeamId),
+          ),
+        },
+      ]),
+    )
+
+    const qaAuthoring = await sandboxStep("Writing integration tests", () =>
+      sandbox.runCommand({
+        cmd: OPENCODE_BIN,
+        args: [
+          "run",
+          "--model",
+          modelId,
+          "--format",
+          "json",
+          "--title",
+          `${input.card.cardKey} QA integration tests`,
+          "--dangerously-skip-permissions",
+          buildQaPrompt(input.project, input.card),
+        ],
+        cwd: WORKDIR,
+        env: {
+          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+        },
+      }),
+    )
+    await assertCommand(qaAuthoring, "Writing integration tests")
+    const qaSummary = "stdout" in qaAuthoring ? (await qaAuthoring.stdout()).trim() : ""
+
+    const integration = await sandboxStep("Running integration tests", () =>
+      sandbox.runCommand({
+        cmd: "bash",
+        args: [INTEGRATION_SCRIPT_PATH],
+        cwd: WORKDIR,
+      }),
+    )
+    await assertCommand(integration, "Running integration tests")
+    const integrationOutput = "stdout" in integration ? await integration.stdout() : ""
+
+    const status = await sandboxStep("Checking QA changes", () =>
+      sandbox.runCommand({
+        cmd: "git",
+        args: ["status", "--short"],
+        cwd: WORKDIR,
+      }),
+    )
+    await assertCommand(status, "Checking QA changes")
+    const changedFiles = "stdout" in status ? (await status.stdout()).trim() : ""
+
+    if (changedFiles) {
+      await assertCommand(
+        await sandboxStep("Configuring QA git user name", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["config", "user.name", "Codapac QA"],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Configuring QA git user name",
+      )
+      await assertCommand(
+        await sandboxStep("Configuring QA git user email", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["config", "user.email", "codapac-qa@users.noreply.github.com"],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Configuring QA git user email",
+      )
+      await assertCommand(
+        await sandboxStep("Preparing QA push access", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["remote", "set-url", "origin", authRepoUrl],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Preparing QA push access",
+      )
+      await assertCommand(
+        await sandboxStep("Staging QA changes", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["add", "-A"],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Staging QA changes",
+      )
+      await assertCommand(
+        await sandboxStep("Committing QA changes", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["commit", "-m", `Add integration tests for ${input.card.cardKey}`],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Committing QA changes",
+      )
+      await assertCommand(
+        await sandboxStep("Pushing QA changes", () =>
+          sandbox.runCommand({
+            cmd: "git",
+            args: ["push", "origin", `HEAD:${input.branchName}`],
+            cwd: WORKDIR,
+          }),
+        ),
+        "Pushing QA changes",
+      )
+    }
+
+    const deploy = await sandboxStep("Creating preview deployment", () =>
+      sandbox.runCommand({
+        cmd: "bash",
+        args: [
+          "-lc",
+          "npx --yes vercel@latest deploy --yes --token \"$VERCEL_TOKEN\"",
+        ],
+        cwd: WORKDIR,
+        env: {
+          VERCEL_TOKEN: vercelToken,
+        },
+      }),
+    )
+    await assertCommand(deploy, "Creating preview deployment")
+    const deployOutput = [
+      "stdout" in deploy ? await deploy.stdout() : "",
+      "stderr" in deploy ? await deploy.stderr() : "",
+    ].join("\n")
+    const previewDeploymentUrl = extractPreviewUrl(deployOutput)
+
+    if (!previewDeploymentUrl) {
+      throw new Error("Vercel preview deployment finished without returning a URL.")
+    }
+
+    return {
+      previewDeploymentUrl,
+      summary: [
+        qaSummary.slice(-1_000),
+        integrationOutput.slice(-1_000),
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+        .trim() || "QA wrote and passed integration tests.",
+    }
+  } finally {
+    await sandbox.stop().catch(() => null)
+  }
+}
