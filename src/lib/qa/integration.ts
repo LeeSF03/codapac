@@ -2,7 +2,7 @@
 
 import { Sandbox } from "@vercel/sandbox"
 
-import { getGitHubToken } from "@/lib/boss/github"
+import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
 import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
 import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
 
@@ -328,6 +328,16 @@ export async function runQaIntegration(input: QaRunInput) {
         },
       ]),
     )
+    await assertCommand(
+      await sandboxStep("Ignoring sandbox deployment metadata", () =>
+        sandbox.runCommand({
+          cmd: "bash",
+          args: ["-lc", "printf '\\n.vercel/\\n' >> .git/info/exclude"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Ignoring sandbox deployment metadata",
+    )
 
     const qaAuthoring = await sandboxStep("Writing integration tests", () =>
       sandbox.runCommand({
@@ -372,37 +382,38 @@ export async function runQaIntegration(input: QaRunInput) {
     await assertCommand(status, "Checking QA changes")
     const changedFiles = "stdout" in status ? (await status.stdout()).trim() : ""
 
+    await assertCommand(
+      await sandboxStep("Configuring QA git user name", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["config", "user.name", "Codapac QA"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Configuring QA git user name",
+    )
+    await assertCommand(
+      await sandboxStep("Configuring QA git user email", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["config", "user.email", "codapac-qa@users.noreply.github.com"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Configuring QA git user email",
+    )
+    await assertCommand(
+      await sandboxStep("Preparing QA git access", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["remote", "set-url", "origin", authRepoUrl],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Preparing QA git access",
+    )
+
     if (changedFiles) {
-      await assertCommand(
-        await sandboxStep("Configuring QA git user name", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: ["config", "user.name", "Codapac QA"],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Configuring QA git user name",
-      )
-      await assertCommand(
-        await sandboxStep("Configuring QA git user email", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: ["config", "user.email", "codapac-qa@users.noreply.github.com"],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Configuring QA git user email",
-      )
-      await assertCommand(
-        await sandboxStep("Preparing QA push access", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: ["remote", "set-url", "origin", authRepoUrl],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Preparing QA push access",
-      )
       await assertCommand(
         await sandboxStep("Staging QA changes", () =>
           sandbox.runCommand({
@@ -434,6 +445,36 @@ export async function runQaIntegration(input: QaRunInput) {
         "Pushing QA changes",
       )
     }
+
+    await sandboxStep("Merging tested branch into main", () =>
+      mergeProjectBranchIntoMain({
+        repoUrl: input.project.repoUrl,
+        branchName: input.branchName,
+        baseBranch: "main",
+        commitMessage: `Merge ${input.card.cardKey} after QA`,
+      }),
+    )
+
+    await assertCommand(
+      await sandboxStep("Checking out merged main for preview deployment", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["fetch", "origin", "main"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Checking out merged main for preview deployment",
+    )
+    await assertCommand(
+      await sandboxStep("Preparing merged main preview", () =>
+        sandbox.runCommand({
+          cmd: "git",
+          args: ["checkout", "--detach", "FETCH_HEAD"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Preparing merged main preview",
+    )
 
     const deploy = await sandboxStep("Creating preview deployment", () =>
       sandbox.runCommand({

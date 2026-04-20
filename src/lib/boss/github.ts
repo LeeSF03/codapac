@@ -8,11 +8,22 @@ type GitHubRepository = {
   html_url: string
 }
 
+type GitHubMergeCommit = {
+  sha: string
+}
+
 type CreateProjectRepositoryArgs = {
   name: string
   slug: string
   description: string
   visibility: "private" | "public"
+}
+
+type MergeProjectBranchArgs = {
+  repoUrl: string
+  branchName: string
+  baseBranch?: string
+  commitMessage?: string
 }
 
 function githubHeaders(token: string) {
@@ -32,6 +43,15 @@ function normalizeRepoName(slug: string) {
     .replace(/-+/g, "-")
     .replace(/^[.-]+|[.-]+$/g, "")
     .slice(0, 90)
+}
+
+function parseGitHubRepoPath(repoUrl: string) {
+  const url = new URL(repoUrl)
+  const path = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "")
+  if (!path || path.split("/").length < 2) {
+    throw new Error("Project repository URL is not a valid GitHub repository URL.")
+  }
+  return path
 }
 
 export function getGitHubToken() {
@@ -160,4 +180,32 @@ export async function createProjectRepository(args: CreateProjectRepositoryArgs)
   }
 
   throw new Error(`Unable to create the GitHub repository: ${response.error}`)
+}
+
+export async function mergeProjectBranchIntoMain(args: MergeProjectBranchArgs) {
+  const token = getGitHubToken()
+  const repoPath = parseGitHubRepoPath(args.repoUrl)
+  const baseBranch = args.baseBranch ?? "main"
+
+  const response = await githubJson<GitHubMergeCommit | null>(
+    `https://api.github.com/repos/${repoPath}/merges`,
+    {
+      method: "POST",
+      headers: githubHeaders(token),
+      body: JSON.stringify({
+        base: baseBranch,
+        head: args.branchName,
+        commit_message:
+          args.commitMessage ??
+          `Merge ${args.branchName} into ${baseBranch}`,
+      }),
+      cache: "no-store",
+    },
+  )
+
+  if (response.ok) {
+    return response.data
+  }
+
+  throw new Error(`Unable to merge ${args.branchName} into ${baseBranch}: ${response.error}`)
 }

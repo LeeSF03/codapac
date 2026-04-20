@@ -40,6 +40,10 @@ const generatedCardSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(32)).max(4),
 })
 
+const generatedCardsSchema = z.object({
+  todos: z.array(generatedCardSchema).max(8),
+})
+
 type GeneratedCardDraft = z.infer<typeof generatedCardSchema>
 
 function parseJsonObject(value: string) {
@@ -115,6 +119,12 @@ const ACTION_WORDS =
 
 const AFFIRMATION =
   /^(yes|yep|yeah|ok|okay|sure|confirm|confirmed|proceed|go ahead|do it|please do|ready)$/i
+
+const CONFIRMATION_PHRASE =
+  /\b(option\s*\d+|sounds good|looks good|good middle ground|go with|pick|choose|that one|the first|the second|the third|let'?s do|do that|works for me)\b/i
+
+const MISSING_TODOS_PHRASE =
+  /\b(todo|task|card|issue)s?\b.*\b(missing|not showing|not shown|not there|didn'?t appear|not added|empty)\b/i
 
 const QUESTION_ONLY =
   /^(what|why|how|when|where|who|can you explain|summari[sz]e|tell me|status|is there)\b/i
@@ -225,6 +235,23 @@ function alreadyHasCard(title: string, context?: ChatIntentContext) {
   return (context?.cards ?? []).some((card) => titleKey(card.title) === key)
 }
 
+function uniqueNewDrafts(
+  drafts: GeneratedCardDraft[],
+  context?: ChatIntentContext,
+) {
+  const seen = new Set<string>()
+
+  return drafts.filter((draft) => {
+    const key = titleKey(draft.title)
+    if (!key || seen.has(key) || alreadyHasCard(draft.title, context)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
+}
+
 function cleanTitle(value: string) {
   return value
     .replace(/\*\*/g, "")
@@ -317,6 +344,32 @@ export function inferChatTodoIntent(
   }
 }
 
+function shouldInferTodoCards(message: string, context?: ChatIntentContext) {
+  const trimmed = message.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  const existingIntent = inferChatTodoIntent(trimmed, context)
+  if (existingIntent.shouldCreate) {
+    return true
+  }
+
+  if (!CONFIRMATION_PHRASE.test(trimmed) && !MISSING_TODOS_PHRASE.test(trimmed)) {
+    return false
+  }
+
+  const recentBossMessages = (context?.messages ?? [])
+    .filter((message) => message.author === "BOSS")
+    .slice(-3)
+    .map((message) => message.content)
+    .join("\n")
+
+  return /\b(option\s*\d+|add(ed)? these tasks|break this down|could break|here are|tasks?|todo)\b/i.test(
+    recentBossMessages,
+  )
+}
+
 function buildCardDraftPrompt(
   userMessage: string,
   intent: ChatTodoIntent,
@@ -358,6 +411,46 @@ function buildCardDraftPrompt(
   ].join("\n")
 }
 
+function buildCardDraftsPrompt(
+  userMessage: string,
+  context?: ChatIntentContext,
+) {
+  const recentMessages = (context?.messages ?? [])
+    .slice(-10)
+    .map((message) => `${message.author}: ${message.content}`)
+    .join("\n")
+
+  const existingCards =
+    (context?.cards ?? []).length > 0
+      ? context?.cards?.map((card) => `- ${card.title}`).join("\n")
+      : "No cards yet."
+
+  return [
+    "Decide whether the latest user message should create To Do cards now.",
+    "Return one JSON object with a todos array. Return an empty todos array if no cards should be created.",
+    "Create cards when the user directly asks for work to be done, or confirms/selects an option that BOSS proposed.",
+    "If the user says expected cards are missing, recreate the cards from the most recent BOSS message that claimed tasks were added.",
+    "When the user selects an option, create the concrete tasks implied by that selected option and any lower-level basics included by that option.",
+    "Do not create cards for pure questions, status checks, or broad discussion without a clear decision.",
+    "Return concise, concrete content for a non-technical user.",
+    "Do not mention deployment, hosting, repositories, tokens, branches, file names, frameworks, environments, or implementation strategy.",
+    "",
+    `Project: ${context?.project?.name ?? "Unknown"} (${context?.project?.slug ?? "unknown"})`,
+    `Project description: ${context?.project?.description || "(none)"}`,
+    "",
+    "Existing cards:",
+    existingCards,
+    "",
+    "Recent conversation:",
+    recentMessages || "(none)",
+    "",
+    `Latest user message: ${userMessage}`,
+    "",
+    "Output shape:",
+    '{"todos":[{"title":"short action title","description":"plain language outcome","acceptanceCriteria":["simple user-verifiable checklist item"],"priority":"low|medium|high","tags":["lowercase-kebab-case"]}]}',
+  ].join("\n")
+}
+
 export async function generateChatCardDraft(
   userMessage: string,
   intent: ChatTodoIntent,
@@ -394,5 +487,68 @@ export async function generateChatCardDraft(
 
     const parsed = parseJsonObject(result.text)
     return normalizeGeneratedCardDraft(parsed, userMessage, intent)
+  }
+}
+
+export async function generateChatCardDrafts(
+  userMessage: string,
+  context?: ChatIntentContext,
+): Promise<GeneratedCardDraft[]> {
+  if (!shouldInferTodoCards(userMessage, context)) {
+    return []
+  }
+
+  const prompt = buildCardDraftsPrompt(userMessage, context)
+  const fallbackIntent = inferChatTodoIntent(userMessage, context)
+
+  try {
+    const result = await generateObject({
+      model: getKimiLanguageModel(),
+      temperature: getKimiTemperature(),
+      schema: generatedCardsSchema,
+      prompt,
+    })
+
+    return uniqueNewDrafts(result.object.todos, context)
+  } catch {
+    const result = await generateText({
+      model: getKimiLanguageModel(),
+      temperature: getKimiTemperature(),
+      maxOutputTokens: 2_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Return only one valid JSON object. No markdown. No prose outside JSON.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    })
+
+    const parsed = parseJsonObject(result.text)
+    const input = parsed && typeof parsed === "object" ? parsed : {}
+    const todos = Array.isArray((input as Record<string, unknown>).todos)
+      ? ((input as Record<string, unknown>).todos as unknown[])
+      : []
+
+    return uniqueNewDrafts(
+      todos.map((todo) =>
+        normalizeGeneratedCardDraft(todo, userMessage, {
+          shouldCreate: true,
+          title:
+            todo && typeof todo === "object" && "title" in todo
+              ? String((todo as Record<string, unknown>).title)
+              : fallbackIntent.title || "Create requested project task",
+          description: fallbackIntent.description,
+          acceptanceCriteria: fallbackIntent.acceptanceCriteria,
+          priority: fallbackIntent.priority,
+          tags: fallbackIntent.tags,
+        }),
+      ),
+      context,
+    )
   }
 }

@@ -3,8 +3,7 @@ import { streamText } from "ai"
 import { z } from "zod"
 
 import {
-  generateChatCardDraft,
-  inferChatTodoIntent,
+  generateChatCardDrafts,
 } from "@/lib/boss/chat-actions"
 import { buildBossChatMessages } from "@/lib/boss/chat"
 import { embedText } from "@/lib/boss/embeddings"
@@ -57,15 +56,10 @@ export async function POST(request: Request) {
       semanticLimit: 8,
     })
 
-    const todoIntent = inferChatTodoIntent(userMessage, context)
-    let createdTodo: { id: string; title: string } | undefined
+    const cardDrafts = await generateChatCardDrafts(userMessage, context)
+    const createdTodos: Array<{ id: string; title: string }> = []
 
-    if (todoIntent.shouldCreate) {
-      const cardDraft = await generateChatCardDraft(
-        userMessage,
-        todoIntent,
-        context,
-      )
+    for (const cardDraft of cardDrafts) {
       const created = await fetchAuthMutation(api.projects.createIssueFromBoss, {
         projectId,
         title: cardDraft.title,
@@ -76,11 +70,13 @@ export async function POST(request: Request) {
         tags: cardDraft.tags,
       })
 
-      createdTodo = {
+      createdTodos.push({
         id: created.id,
         title: cardDraft.title,
-      }
+      })
+    }
 
+    if (createdTodos.length > 0) {
       context = await fetchAuthAction(api.projectChatActions.buildReplyContext, {
         projectId,
         embedding: userEmbedding,
@@ -91,7 +87,7 @@ export async function POST(request: Request) {
 
     const messages = buildBossChatMessages({
       ...context,
-      createdTodo,
+      createdTodos,
     })
 
     const result = streamText({

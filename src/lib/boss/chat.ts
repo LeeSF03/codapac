@@ -25,10 +25,10 @@ type ProjectChatContext = {
     author: "USER" | "BOSS" | "SYSTEM"
     content: string
   }>
-  createdTodo?: {
+  createdTodos?: Array<{
     id: string
     title: string
-  }
+  }>
 }
 
 function buildSystemPrompt() {
@@ -42,7 +42,9 @@ function buildSystemPrompt() {
     "Be concise, direct, and outcome-focused.",
     "Do not invent implementation progress that is not present in the provided context.",
     "If the board is empty, acknowledge that and propose one simple next move.",
-    "If a To Do card was just created, clearly say it has been added to the To Do column and do not ask permission to add it.",
+    "Only say To Do cards were added when the context lists one or more just-created cards.",
+    "If no To Do cards were just created, do not claim that anything was added to the board.",
+    "If To Do cards were just created, clearly say they were added to the To Do column and do not ask permission to add them.",
     "If the user asks for a plan, respond with a useful planning answer in normal prose.",
     "Use clean Markdown with short paragraphs and bullets when listing options.",
     "Do not output JSON unless explicitly asked.",
@@ -50,6 +52,13 @@ function buildSystemPrompt() {
 }
 
 function buildProjectContextBlock(context: ProjectChatContext) {
+  const createdTodos =
+    context.createdTodos && context.createdTodos.length > 0
+      ? context.createdTodos
+          .map((todo) => `- ${todo.id}: ${todo.title}`)
+          .join("\n")
+      : "none"
+
   const cards =
     context.cards.length === 0
       ? "No cards on the board yet."
@@ -61,9 +70,8 @@ function buildProjectContextBlock(context: ProjectChatContext) {
     `Project: ${context.project.name} (${context.project.slug})`,
     `Goal: ${context.project.description || "(none provided)"}`,
     `Planning status: ${context.project.planningStatus}`,
-    context.createdTodo
-      ? `Just-created To Do card: ${context.createdTodo.id} - ${context.createdTodo.title}`
-      : "Just-created To Do card: none",
+    "Just-created To Do cards:",
+    createdTodos,
     "Current board items:",
     cards,
   ].join("\n")
