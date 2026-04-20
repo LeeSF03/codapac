@@ -116,11 +116,22 @@ async function linkVercelProjectToGitHub(
   projectIdOrName: string,
   repoUrl?: string | null,
 ) {
+  void token
+  void teamId
+  void projectIdOrName
   if (!repoUrl) return
+  void parseGitHubRepoPath(repoUrl)
+  // Vercel's Projects PATCH endpoint rejects `gitRepository` for this API
+  // shape. Agents deploy from checked-out source, so Git linking is optional.
+}
 
-  const repo = parseGitHubRepoPath(repoUrl)
+async function ensurePublicPreviewAccess(
+  token: string,
+  teamId: string,
+  projectId: string,
+) {
   const url = new URL(
-    `https://api.vercel.com/v9/projects/${encodeURIComponent(projectIdOrName)}`,
+    `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}`,
   )
   url.searchParams.set("teamId", teamId)
 
@@ -128,19 +139,18 @@ async function linkVercelProjectToGitHub(
     method: "PATCH",
     headers: vercelHeaders(token),
     body: JSON.stringify({
-      gitRepository: {
-        type: "github",
-        repo,
-      },
+      ssoProtection: null,
     }),
     cache: "no-store",
   })
 
   if (!response.ok) {
-    // Git linking depends on the Vercel GitHub integration being installed.
-    // Source-based preview deploys still work, so this should not block agents.
-    console.warn(`Unable to link Vercel project to GitHub: ${response.error}`)
+    throw new Error(
+      `Unable to make preview deployments public by default: ${response.error}`,
+    )
   }
+
+  return response.data
 }
 
 export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
@@ -153,10 +163,11 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
     if (args.repoUrl && existing.link?.repo !== parseGitHubRepoPath(args.repoUrl)) {
       await linkVercelProjectToGitHub(token, teamId, existing.id, args.repoUrl)
     }
+    const configured = await ensurePublicPreviewAccess(token, teamId, existing.id)
 
     return {
-      id: existing.id,
-      name: existing.name,
+      id: configured.id,
+      name: configured.name,
       teamId,
       token,
     }
@@ -170,22 +181,21 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
     headers: vercelHeaders(token),
     body: JSON.stringify({
       name: projectName,
-      ...(args.repoUrl
-        ? {
-            gitRepository: {
-              type: "github",
-              repo: parseGitHubRepoPath(args.repoUrl),
-            },
-          }
-        : { skipGitConnectDuringLink: true }),
+      skipGitConnectDuringLink: true,
     }),
     cache: "no-store",
   })
 
   if (created.ok) {
+    const configured = await ensurePublicPreviewAccess(
+      token,
+      teamId,
+      created.data.id,
+    )
+
     return {
-      id: created.data.id,
-      name: created.data.name,
+      id: configured.id,
+      name: configured.name,
       teamId,
       token,
     }
@@ -206,10 +216,15 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
 
     if (fallback.ok) {
       await linkVercelProjectToGitHub(token, teamId, fallback.data.id, args.repoUrl)
+      const configured = await ensurePublicPreviewAccess(
+        token,
+        teamId,
+        fallback.data.id,
+      )
 
       return {
-        id: fallback.data.id,
-        name: fallback.data.name,
+        id: configured.id,
+        name: configured.name,
         teamId,
         token,
       }
@@ -220,10 +235,11 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
     const raced = await findVercelProject(token, teamId, projectName)
     if (raced) {
       await linkVercelProjectToGitHub(token, teamId, raced.id, args.repoUrl)
+      const configured = await ensurePublicPreviewAccess(token, teamId, raced.id)
 
       return {
-        id: raced.id,
-        name: raced.name,
+        id: configured.id,
+        name: configured.name,
         teamId,
         token,
       }
@@ -231,4 +247,28 @@ export async function ensureVercelProject(args: EnsureVercelProjectArgs) {
   }
 
   throw new Error(`Unable to create the Vercel project: ${created.error}`)
+}
+
+export async function deleteVercelProject(projectId: string) {
+  const token = getVercelToken()
+  const teamId = getVercelTeamId()
+  const url = new URL(
+    `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}`,
+  )
+  url.searchParams.set("teamId", teamId)
+
+  const response = await fetch(url.toString(), {
+    method: "DELETE",
+    headers: vercelHeaders(token),
+    cache: "no-store",
+  })
+
+  if (response.status === 204 || response.status === 404) {
+    return
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown
+  throw new Error(
+    `Unable to delete the Vercel project: ${summarizeVercelError(payload)}`,
+  )
 }

@@ -10,9 +10,22 @@ import { useMutation, useQuery } from "convex/react"
 
 import { ProjectBoard } from "@/components/project-board"
 import { SiteHeader } from "@/components/site-header"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { projectColor } from "@/lib/mock-projects"
 import { api } from "~/convex/_generated/api"
+
+type StreamingAgentAuthor = "BOSS" | "PROGRAMMER" | "QA"
 
 function planningMessage(status: string) {
   if (status === "queued") {
@@ -51,7 +64,6 @@ export default function ProjectDetailPage() {
   )
 
   const toggleStar = useMutation(api.projects.toggleStar)
-  const deleteProject = useMutation(api.projects.deleteProject)
   const createIssue = useMutation(api.projects.createIssue)
   const advanceCard = useMutation(api.projects.advanceCard)
   const regressCard = useMutation(api.projects.regressCard)
@@ -60,6 +72,10 @@ export default function ProjectDetailPage() {
   const convexAuthPending = projects === null
   const [chatBusy, setChatBusy] = useState(false)
   const [streamingReply, setStreamingReply] = useState<string | null>(null)
+  const [streamingAuthor, setStreamingAuthor] =
+    useState<StreamingAgentAuthor>("BOSS")
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   useEffect(() => {
     if (!project || project.planning.status !== "queued") {
@@ -141,12 +157,81 @@ export default function ProjectDetailPage() {
           {
             id: "__streaming-boss",
             role: "assistant" as const,
-            author: "BOSS" as const,
+            author: streamingAuthor,
             content: streamingReply,
             time: "now",
+            createdAt: Date.now(),
           },
         ]
       : chatMessages
+
+  const launchQaForCard = async (cardKey: string, recoveryDepth = 0) => {
+    const response = await fetch("/api/qa/launch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: project.id,
+        cardKey,
+        recoveryDepth,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null
+      throw new Error(payload?.error || "Failed to start QA.")
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          status?: string
+          cardKey?: string
+        }
+      | null
+
+    if (
+      payload?.status === "reassigned_to_programmer" &&
+      recoveryDepth < 2
+    ) {
+      await launchProgrammerThenQa(payload.cardKey ?? cardKey, recoveryDepth + 1)
+      return
+    }
+
+    if (payload?.status === "qa_retry_needed" && recoveryDepth < 1) {
+      await launchQaForCard(cardKey, recoveryDepth + 1)
+    }
+  }
+
+  const launchProgrammerThenQa = async (
+    cardKeys: string | string[],
+    recoveryDepth = 0,
+  ) => {
+    const keys = Array.isArray(cardKeys) ? cardKeys : [cardKeys]
+    const response = await fetch("/api/programmer/launch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: project.id,
+        cardKeys: keys,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null
+      throw new Error(payload?.error || "Failed to start Programmer.")
+    }
+
+    for (const key of keys) {
+      await launchQaForCard(key, recoveryDepth)
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-background">
@@ -174,44 +259,12 @@ export default function ProjectDetailPage() {
           try {
             const card = board.cards.find((item) => item.id === cardKey)
             if (card?.tone === "todo") {
-              const response = await fetch("/api/programmer/launch", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  projectId: project.id,
-                  cardKey,
-                }),
-              })
-
-              if (!response.ok) {
-                const payload = (await response.json().catch(() => null)) as
-                  | { error?: string }
-                  | null
-                throw new Error(payload?.error || "Failed to start Programmer.")
-              }
+              await launchProgrammerThenQa(cardKey)
               return
             }
 
             if (card?.tone === "done") {
-              const response = await fetch("/api/qa/launch", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  projectId: project.id,
-                  cardKey,
-                }),
-              })
-
-              if (!response.ok) {
-                const payload = (await response.json().catch(() => null)) as
-                  | { error?: string }
-                  | null
-                throw new Error(payload?.error || "Failed to start QA.")
-              }
+              await launchQaForCard(cardKey)
               return
             }
 
@@ -230,7 +283,7 @@ export default function ProjectDetailPage() {
         }}
         chatMessages={visibleChatMessages}
         chatBusy={chatBusy}
-        chatPlaceholder="Ask BOSS to clarify the goal, prioritise work, or suggest the next move."
+        chatPlaceholder="Ask the squad to clarify the goal, prioritise work, or build the next task."
         chatQuickPrompts={[
           "Summarize this project and tell me the best first milestone.",
           "Given the current board, what should BOSS prioritize next?",
@@ -239,7 +292,9 @@ export default function ProjectDetailPage() {
         onSendChat={async (message) => {
           setChatBusy(true)
           setStreamingReply(null)
+          setStreamingAuthor("BOSS")
           let completedStream = false
+
           try {
             const response = await fetch("/api/project/chat", {
               method: "POST",
@@ -261,6 +316,66 @@ export default function ProjectDetailPage() {
 
             if (!response.body) {
               throw new Error("Project chat response did not include a stream.")
+            }
+
+            const responseAuthor = response.headers.get("x-codapac-chat-author")
+            setStreamingAuthor(
+              responseAuthor === "PROGRAMMER" || responseAuthor === "QA"
+                ? responseAuthor
+                : "BOSS",
+            )
+            const launchCardKeys = (
+              response.headers.get("x-codapac-launch-card-keys") ?? ""
+            )
+              .split(",")
+              .map((cardKey) => cardKey.trim())
+              .filter(Boolean)
+            const qaCardKeys = (
+              response.headers.get("x-codapac-qa-card-keys") ?? ""
+            )
+              .split(",")
+              .map((cardKey) => cardKey.trim())
+              .filter(Boolean)
+            const rawLaunchGroups = response.headers.get(
+              "x-codapac-launch-card-groups",
+            )
+            const launchGroups = rawLaunchGroups
+              ? (JSON.parse(decodeURIComponent(rawLaunchGroups)) as unknown)
+              : null
+            const groupedCardKeys =
+              Array.isArray(launchGroups) &&
+              launchGroups.every(
+                (group) =>
+                  Array.isArray(group) &&
+                  group.every((cardKey) => typeof cardKey === "string"),
+              )
+                ? (launchGroups as string[][])
+                : launchCardKeys.map((cardKey) => [cardKey])
+
+            if (groupedCardKeys.length > 0) {
+              void (async () => {
+                for (const launchGroup of groupedCardKeys) {
+                  await launchProgrammerThenQa(launchGroup)
+                }
+              })().catch((error: unknown) => {
+                window.alert(
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to start Programmer.",
+                )
+              })
+            }
+
+            if (qaCardKeys.length > 0) {
+              void (async () => {
+                for (const qaCardKey of qaCardKeys) {
+                  await launchQaForCard(qaCardKey)
+                }
+              })().catch((error: unknown) => {
+                window.alert(
+                  error instanceof Error ? error.message : "Failed to start QA.",
+                )
+              })
             }
 
             const reader = response.body.getReader()
@@ -394,22 +509,76 @@ export default function ProjectDetailPage() {
                 </svg>
                 {project.starred ? "Starred" : "Star"}
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                onClick={async () => {
-                  const ok = window.confirm(
-                    `Delete "${project.name}" from your live workspace?`,
-                  )
-                  if (!ok) return
-                  await deleteProject({ projectId: project.id })
-                  router.push("/project" as Route)
+              <AlertDialog
+                open={deleteDialogOpen}
+                onOpenChange={(open) => {
+                  if (!deleteBusy) {
+                    setDeleteDialogOpen(open)
+                  }
                 }}
-                className="text-muted-foreground hover:text-destructive"
               >
-                Delete
-              </Button>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete project?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete <strong>{project.name}</strong>,
+                      its board, chat history, GitHub repository, and Vercel
+                      project.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={deleteBusy}>
+                      Cancel
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={deleteBusy}
+                      onClick={async (event) => {
+                        event.preventDefault()
+                        try {
+                          setDeleteBusy(true)
+                          const response = await fetch("/api/project/delete", {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({ projectId: project.id }),
+                          })
+                          if (!response.ok) {
+                            const payload = (await response.json().catch(() => null)) as
+                              | { error?: string }
+                              | null
+                            throw new Error(
+                              payload?.error || "Failed to delete project.",
+                            )
+                          }
+                          setDeleteDialogOpen(false)
+                          router.push("/project" as Route)
+                        } catch (error) {
+                          window.alert(
+                            error instanceof Error
+                              ? error.message
+                              : "Failed to delete project.",
+                          )
+                        } finally {
+                          setDeleteBusy(false)
+                        }
+                      }}
+                    >
+                      {deleteBusy ? "Deleting..." : "Delete project"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           </nav>
         }

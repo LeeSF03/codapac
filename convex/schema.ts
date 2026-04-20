@@ -41,6 +41,8 @@ const chatRole = v.union(
 const chatAuthor = v.union(
   v.literal("USER"),
   v.literal("BOSS"),
+  v.literal("PROGRAMMER"),
+  v.literal("QA"),
   v.literal("SYSTEM"),
 )
 const planningStatus = v.union(

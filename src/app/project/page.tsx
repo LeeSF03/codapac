@@ -354,7 +354,6 @@ export default function ProjectIndexPage() {
     color?: ProjectColor
     visibility?: ProjectVisibility
     repoUrl?: string
-    kickoffPrompt?: string
   }) => {
     try {
       const created = await createProject({
@@ -365,7 +364,6 @@ export default function ProjectIndexPage() {
         color: input.color ?? null,
         visibility: input.visibility ?? null,
         repoUrl: input.repoUrl ?? null,
-        kickoffPrompt: input.kickoffPrompt ?? null,
       })
       router.push(`/project/${created.slug}` as Route)
       return created

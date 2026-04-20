@@ -2,7 +2,7 @@
 
 import { Sandbox } from "@vercel/sandbox"
 
-import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
+import { getGitHubToken } from "@/lib/boss/github"
 import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
 import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
 
@@ -59,6 +59,20 @@ function gitSourceUrl(repoUrl: string) {
   return `https://github.com/${repoPath}.git`
 }
 
+function safeBranchSegment(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .slice(0, 80)
+}
+
+function buildQaBranchName(card: QaCard, externalRunId: string) {
+  const suffix = safeBranchSegment(externalRunId).slice(-10) || Date.now().toString(36)
+  return `codapac/qa-${safeBranchSegment(card.cardKey)}-${suffix}`.slice(0, 120)
+}
+
 function opencodeModelId(providerId: string, kimiModel: string) {
   return `${providerId}/${kimiModel}`
 }
@@ -105,6 +119,7 @@ function buildQaPrompt(project: QaProject, card: QaCard) {
     "Prefer the repository's existing test framework. If no integration test setup exists, add a minimal integration test setup and a package script named test:integration.",
     "Keep tests deterministic and local. Do not require external services, secrets, paid APIs, or production credentials.",
     "Do not merge branches. Do not deploy. Do not commit or push. The host application handles git and preview deployment after tests pass.",
+    "The programmer's work has already been merged into main. Test the current main branch.",
     "",
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
@@ -191,11 +206,26 @@ async function assertCommand(
     return
   }
 
-  const stderr = "stderr" in command ? await command.stderr() : ""
-  const stdout = "stdout" in command ? await command.stdout() : ""
+  const stderr = "stderr" in command ? await safeCommandOutput(command, "stderr") : ""
+  const stdout = "stdout" in command ? await safeCommandOutput(command, "stdout") : ""
   const details = redactSensitiveOutput([stderr, stdout].filter(Boolean).join("\n"))
     .slice(0, 1_500)
   throw new Error(`${label} failed.${details ? ` ${details}` : ""}`)
+}
+
+async function safeCommandOutput(
+  command: Awaited<ReturnType<Sandbox["runCommand"]>>,
+  stream: "stdout" | "stderr",
+) {
+  if (!(stream in command)) {
+    return ""
+  }
+
+  try {
+    return await command[stream]()
+  } catch (error) {
+    return describeSandboxError(error)
+  }
 }
 
 function redactSensitiveOutput(value: string) {
@@ -239,6 +269,78 @@ async function sandboxStep<T>(label: string, operation: () => Promise<T>) {
   }
 }
 
+function isRetryableQaAuthoringError(error: unknown) {
+  const message = errorMessage(error).toLowerCase()
+  return (
+    message.includes("stream ended before command finished") ||
+    message.includes("connection closed") ||
+    message.includes("socket hang up") ||
+    message.includes("terminated")
+  )
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function qaAuthoringArgs(
+  modelId: string,
+  card: QaCard,
+  project: QaProject,
+  format: "json" | "text",
+) {
+  const args = [
+    "run",
+    "--model",
+    modelId,
+    "--title",
+    `${card.cardKey} QA integration tests`,
+    "--dangerously-skip-permissions",
+  ]
+
+  if (format === "json") {
+    args.splice(3, 0, "--format", "json")
+  }
+
+  args.push(buildQaPrompt(project, card))
+  return args
+}
+
+async function runQaAuthoring(
+  sandbox: Sandbox,
+  modelId: string,
+  project: QaProject,
+  card: QaCard,
+) {
+  try {
+    return await sandboxStep("Writing integration tests", () =>
+      sandbox.runCommand({
+        cmd: OPENCODE_BIN,
+        args: qaAuthoringArgs(modelId, card, project, "json"),
+        cwd: WORKDIR,
+        env: {
+          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+        },
+      }),
+    )
+  } catch (error) {
+    if (!isRetryableQaAuthoringError(error)) {
+      throw error
+    }
+
+    return await sandboxStep("Retrying integration test authoring", () =>
+      sandbox.runCommand({
+        cmd: OPENCODE_BIN,
+        args: qaAuthoringArgs(modelId, card, project, "text"),
+        cwd: WORKDIR,
+        env: {
+          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+        },
+      }),
+    )
+  }
+}
+
 export async function runQaIntegration(input: QaRunInput) {
   const githubToken = getGitHubToken()
   const kimiToken = getKimiToken()
@@ -248,6 +350,7 @@ export async function runQaIntegration(input: QaRunInput) {
   const modelId = opencodeModelId("moonshot", kimiModel)
   const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
   const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
+  const qaBranchName = buildQaBranchName(input.card, input.externalRunId)
 
   const sandbox = await sandboxStep("Creating the QA sandbox", () =>
     Sandbox.create({
@@ -260,7 +363,7 @@ export async function runQaIntegration(input: QaRunInput) {
         url: sourceRepoUrl,
         username: "x-access-token",
         password: githubToken,
-        revision: input.branchName,
+        revision: "main",
         depth: 1,
       },
       timeout: SANDBOX_TIMEOUT_MS,
@@ -270,14 +373,14 @@ export async function runQaIntegration(input: QaRunInput) {
 
   try {
     await assertCommand(
-      await sandboxStep("Checking out the QA branch", () =>
+      await sandboxStep("Creating the QA branch from main", () =>
         sandbox.runCommand({
           cmd: "git",
-          args: ["checkout", "-B", input.branchName],
+          args: ["checkout", "-B", qaBranchName],
           cwd: WORKDIR,
         }),
       ),
-      "Checking out the QA branch",
+      "Creating the QA branch from main",
     )
 
     await input.onStarted?.({
@@ -339,28 +442,16 @@ export async function runQaIntegration(input: QaRunInput) {
       "Ignoring sandbox deployment metadata",
     )
 
-    const qaAuthoring = await sandboxStep("Writing integration tests", () =>
-      sandbox.runCommand({
-        cmd: OPENCODE_BIN,
-        args: [
-          "run",
-          "--model",
-          modelId,
-          "--format",
-          "json",
-          "--title",
-          `${input.card.cardKey} QA integration tests`,
-          "--dangerously-skip-permissions",
-          buildQaPrompt(input.project, input.card),
-        ],
-        cwd: WORKDIR,
-        env: {
-          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-        },
-      }),
+    const qaAuthoring = await runQaAuthoring(
+      sandbox,
+      modelId,
+      input.project,
+      input.card,
     )
     await assertCommand(qaAuthoring, "Writing integration tests")
-    const qaSummary = "stdout" in qaAuthoring ? (await qaAuthoring.stdout()).trim() : ""
+    const qaSummary = "stdout" in qaAuthoring
+      ? (await safeCommandOutput(qaAuthoring, "stdout")).trim()
+      : ""
 
     const integration = await sandboxStep("Running integration tests", () =>
       sandbox.runCommand({
@@ -370,7 +461,8 @@ export async function runQaIntegration(input: QaRunInput) {
       }),
     )
     await assertCommand(integration, "Running integration tests")
-    const integrationOutput = "stdout" in integration ? await integration.stdout() : ""
+    const integrationOutput =
+      "stdout" in integration ? await safeCommandOutput(integration, "stdout") : ""
 
     const status = await sandboxStep("Checking QA changes", () =>
       sandbox.runCommand({
@@ -380,7 +472,9 @@ export async function runQaIntegration(input: QaRunInput) {
       }),
     )
     await assertCommand(status, "Checking QA changes")
-    const changedFiles = "stdout" in status ? (await status.stdout()).trim() : ""
+    const changedFiles = "stdout" in status
+      ? (await safeCommandOutput(status, "stdout")).trim()
+      : ""
 
     await assertCommand(
       await sandboxStep("Configuring QA git user name", () =>
@@ -438,7 +532,7 @@ export async function runQaIntegration(input: QaRunInput) {
         await sandboxStep("Pushing QA changes", () =>
           sandbox.runCommand({
             cmd: "git",
-            args: ["push", "origin", `HEAD:${input.branchName}`],
+            args: ["push", "origin", `HEAD:${qaBranchName}`],
             cwd: WORKDIR,
           }),
         ),
@@ -446,34 +540,25 @@ export async function runQaIntegration(input: QaRunInput) {
       )
     }
 
-    await sandboxStep("Merging tested branch into main", () =>
-      mergeProjectBranchIntoMain({
-        repoUrl: input.project.repoUrl,
-        branchName: input.branchName,
-        baseBranch: "main",
-        commitMessage: `Merge ${input.card.cardKey} after QA`,
-      }),
-    )
-
     await assertCommand(
-      await sandboxStep("Checking out merged main for preview deployment", () =>
+      await sandboxStep("Checking out main for preview deployment", () =>
         sandbox.runCommand({
           cmd: "git",
           args: ["fetch", "origin", "main"],
           cwd: WORKDIR,
         }),
       ),
-      "Checking out merged main for preview deployment",
+      "Checking out main for preview deployment",
     )
     await assertCommand(
-      await sandboxStep("Preparing merged main preview", () =>
+      await sandboxStep("Preparing main preview", () =>
         sandbox.runCommand({
           cmd: "git",
           args: ["checkout", "--detach", "FETCH_HEAD"],
           cwd: WORKDIR,
         }),
       ),
-      "Preparing merged main preview",
+      "Preparing main preview",
     )
 
     const deploy = await sandboxStep("Creating preview deployment", () =>
@@ -491,8 +576,8 @@ export async function runQaIntegration(input: QaRunInput) {
     )
     await assertCommand(deploy, "Creating preview deployment")
     const deployOutput = [
-      "stdout" in deploy ? await deploy.stdout() : "",
-      "stderr" in deploy ? await deploy.stderr() : "",
+      "stdout" in deploy ? await safeCommandOutput(deploy, "stdout") : "",
+      "stderr" in deploy ? await safeCommandOutput(deploy, "stderr") : "",
     ].join("\n")
     const previewDeploymentUrl = extractPreviewUrl(deployOutput)
 
@@ -511,6 +596,6 @@ export async function runQaIntegration(input: QaRunInput) {
         .trim() || "QA wrote and passed integration tests.",
     }
   } finally {
-    await sandbox.stop().catch(() => null)
+    await sandbox.stop({ blocking: true }).catch(() => null)
   }
 }

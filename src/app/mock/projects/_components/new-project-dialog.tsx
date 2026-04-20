@@ -45,7 +45,6 @@ export function NewProjectDialog({
   const [color, setColor] = useState<ProjectColor>("sky")
   const [visibility, setVisibility] = useState<ProjectVisibility>("private")
   const [repoUrl, setRepoUrl] = useState("")
-  const [kickoffPrompt, setKickoffPrompt] = useState("")
   const [errors, setErrors] = useState<FieldErrors>({})
   const [submitting, setSubmitting] = useState(false)
 
@@ -61,7 +60,6 @@ export function NewProjectDialog({
     )
     setVisibility("private")
     setRepoUrl("")
-    setKickoffPrompt("")
     setErrors({})
     setSubmitting(false)
     const t = window.setTimeout(() => firstFieldRef.current?.focus(), 40)
@@ -103,7 +101,6 @@ export function NewProjectDialog({
       color,
       visibility,
       repoUrl: repoUrl.trim() || undefined,
-      kickoffPrompt: kickoffPrompt.trim() || undefined,
     }
     try {
       const project = onCreateProject
@@ -123,7 +120,7 @@ export function NewProjectDialog({
       role="dialog"
       aria-modal="true"
       aria-label="Create a new project"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto px-4 py-4 sm:items-center sm:py-8"
     >
       <button
         type="button"
@@ -131,7 +128,7 @@ export function NewProjectDialog({
         onClick={onClose}
         className="absolute inset-0 bg-background/70 backdrop-blur-sm"
       />
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-card shadow-2xl [animation:cp-fade-up_0.22s_ease-out]">
+      <div className="relative max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card shadow-2xl [animation:cp-fade-up_0.22s_ease-out] sm:max-h-[calc(100dvh-4rem)]">
         <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -303,22 +300,6 @@ export function NewProjectDialog({
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="mt-5 grid gap-1.5">
-            <Label htmlFor="project-kickoff" className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Kickoff prompt <span className="text-muted-foreground/70">(optional)</span>
-            </Label>
-            <Textarea
-              id="project-kickoff"
-              value={kickoffPrompt}
-              onChange={(e) => setKickoffPrompt(e.target.value)}
-              placeholder="Build a fintech onboarding app for Malaysian SMEs with KYC, team approvals, and a responsive admin dashboard."
-              rows={4}
-            />
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              When provided, this brief can be handed to BOSS later to turn into the initial todo backlog.
-            </p>
           </div>
 
           <div className="mt-5 grid gap-1.5">

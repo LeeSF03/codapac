@@ -47,7 +47,6 @@ export type NewProjectInput = {
   color?: ProjectColor
   visibility?: ProjectVisibility
   repoUrl?: string
-  kickoffPrompt?: string
 }
 
 export const PROJECT_COLORS: {
