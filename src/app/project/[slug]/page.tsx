@@ -27,6 +27,15 @@ import { api } from "~/convex/_generated/api"
 
 type StreamingAgentAuthor = "BOSS" | "PROGRAMMER" | "QA"
 
+type ErrorDialogState = {
+  title: string
+  description: string
+}
+
+type DeploymentNoticeState = {
+  url: string
+}
+
 function planningMessage(status: string) {
   if (status === "queued") {
     return "BOSS is getting the first set of tasks ready."
@@ -41,6 +50,68 @@ function planningMessage(status: string) {
     return "BOSS has already created the first task list for this project."
   }
   return null
+}
+
+function toFriendlyError(error: unknown, fallbackTitle: string): ErrorDialogState {
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message.trim()
+      : ""
+
+  if (
+    message.includes("Failed to start Programmer") ||
+    message.includes("Programmer launch failed")
+  ) {
+    return {
+      title: "Builder unavailable",
+      description:
+        "The builder could not start this task right now. Please try again in a moment.",
+    }
+  }
+
+  if (
+    message.includes("Failed to start QA") ||
+    message.includes("QA launch failed")
+  ) {
+    return {
+      title: "Testing unavailable",
+      description:
+        "The testing agent could not start right now. Please try again in a moment.",
+    }
+  }
+
+  if (
+    message.includes("Failed to send project chat message") ||
+    message.includes("did not include a stream")
+  ) {
+    return {
+      title: "Message not sent",
+      description:
+        "The project chat could not respond properly. Please send your message again.",
+    }
+  }
+
+  if (message.includes("Failed to move the task")) {
+    return {
+      title: "Task not updated",
+      description:
+        "The task could not be updated right now. Please try again.",
+    }
+  }
+
+  if (message.includes("Failed to delete project")) {
+    return {
+      title: "Project not deleted",
+      description:
+        "The project could not be deleted. Nothing was removed, so you can safely try again.",
+    }
+  }
+
+  return {
+    title: fallbackTitle,
+    description:
+      message || "Something went wrong. Please try again in a moment.",
+  }
 }
 
 export default function ProjectDetailPage() {
@@ -76,6 +147,10 @@ export default function ProjectDetailPage() {
     useState<StreamingAgentAuthor>("BOSS")
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [errorDialog, setErrorDialog] = useState<ErrorDialogState | null>(null)
+  const [deploymentNotice, setDeploymentNotice] =
+    useState<DeploymentNoticeState | null>(null)
+  const deploymentUrlRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     if (!project || project.planning.status !== "queued") {
@@ -95,6 +170,24 @@ export default function ProjectDetailPage() {
       },
       body: JSON.stringify({ projectId: project.id }),
     })
+  }, [project])
+
+  useEffect(() => {
+    if (!project) {
+      return
+    }
+
+    const nextUrl = project.latestPreviewDeploymentUrl ?? null
+    if (deploymentUrlRef.current === undefined) {
+      deploymentUrlRef.current = nextUrl
+      return
+    }
+
+    if (nextUrl && nextUrl !== deploymentUrlRef.current) {
+      setDeploymentNotice({ url: nextUrl })
+    }
+
+    deploymentUrlRef.current = nextUrl
   }, [project])
 
   if (
@@ -270,9 +363,7 @@ export default function ProjectDetailPage() {
 
             await advanceCard({ projectId: project.id, cardKey })
           } catch (error) {
-            window.alert(
-              error instanceof Error ? error.message : "Failed to move the task.",
-            )
+            setErrorDialog(toFriendlyError(error, "Task update failed"))
           }
         }}
         onRegressCard={async (cardKey) => {
@@ -358,11 +449,7 @@ export default function ProjectDetailPage() {
                   await launchProgrammerThenQa(launchGroup)
                 }
               })().catch((error: unknown) => {
-                window.alert(
-                  error instanceof Error
-                    ? error.message
-                    : "Failed to start Programmer.",
-                )
+                setErrorDialog(toFriendlyError(error, "Builder unavailable"))
               })
             }
 
@@ -372,9 +459,7 @@ export default function ProjectDetailPage() {
                   await launchQaForCard(qaCardKey)
                 }
               })().catch((error: unknown) => {
-                window.alert(
-                  error instanceof Error ? error.message : "Failed to start QA.",
-                )
+                setErrorDialog(toFriendlyError(error, "Testing unavailable"))
               })
             }
 
@@ -394,11 +479,7 @@ export default function ProjectDetailPage() {
             completedStream = true
           } catch (error) {
             setStreamingReply(null)
-            window.alert(
-              error instanceof Error
-                ? error.message
-                : "Failed to send project chat message.",
-            )
+            setErrorDialog(toFriendlyError(error, "Message not sent"))
           } finally {
             setChatBusy(false)
             if (completedStream) {
@@ -564,10 +645,8 @@ export default function ProjectDetailPage() {
                           setDeleteDialogOpen(false)
                           router.push("/project" as Route)
                         } catch (error) {
-                          window.alert(
-                            error instanceof Error
-                              ? error.message
-                              : "Failed to delete project.",
+                          setErrorDialog(
+                            toFriendlyError(error, "Project not deleted"),
                           )
                         } finally {
                           setDeleteBusy(false)
@@ -583,6 +662,72 @@ export default function ProjectDetailPage() {
           </nav>
         }
       />
+      {deploymentNotice ? (
+        <div className="pointer-events-none fixed right-6 bottom-6 z-50">
+          <div className="pointer-events-auto w-[min(28rem,calc(100vw-3rem))] rounded-2xl border border-emerald-500/25 bg-card p-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">
+                  Project deployed successfully
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Your latest preview is live and ready to open.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button asChild size="sm">
+                    <a
+                      href={deploymentNotice.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open preview
+                    </a>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeploymentNotice(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <AlertDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setErrorDialog(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {errorDialog?.title ?? "Something went wrong"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {errorDialog?.description ??
+                "Please try again in a moment."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                setErrorDialog(null)
+              }}
+            >
+              OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
