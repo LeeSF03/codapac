@@ -15,7 +15,6 @@ import { AgentBadge } from "@/components/agent-badge"
 import {
   AGENTS,
   AgentName,
-  AgentStatusDot,
 } from "@/components/agent-orb"
 import {
   NewIssueDialog,
@@ -32,7 +31,6 @@ import {
   deleteCard,
   regressCard,
   resetBoard,
-  ROLES,
   TONE_ORDER,
   useBoard,
   type BoardActivityEntry,
@@ -40,6 +38,34 @@ import {
   type Role,
   type Tone,
 } from "@/lib/mock-board"
+
+type ProjectChatAuthor = "USER" | "BOSS" | "PROGRAMMER" | "QA" | "SYSTEM"
+
+type ProjectChatMessage = {
+  id: string
+  role: "user" | "assistant" | "system"
+  author: ProjectChatAuthor
+  content: string
+  time: string
+  createdAt?: number
+}
+
+export type ProjectBoardActiveRun = {
+  id: string
+  cardKey: string
+  title: string
+  agent: Role
+  stage: "programmer" | "qa"
+  notes?: string | null
+  updatedAt: number
+}
+
+type ProjectBoardData = {
+  cards: BoardCard[]
+  activity: BoardActivityEntry[]
+  typing: Role | null
+  activeRuns?: ProjectBoardActiveRun[]
+}
 
 type CardItemProps = {
   card: BoardCard
@@ -178,7 +204,7 @@ function CardItem({
 export type ProjectBoardProps = {
   /** When provided, the board reads from localStorage and enables create/move/delete. */
   projectId?: string
-  boardState?: Pick<ReturnType<typeof useBoard>, "cards" | "activity" | "typing">
+  boardState?: ProjectBoardData
   interactive?: boolean
   eyebrow?: ReactNode
   title?: ReactNode
@@ -192,17 +218,24 @@ export type ProjectBoardProps = {
   onRegressCard?: (cardId: string) => Promise<void> | void
   onDeleteCard?: (cardId: string) => Promise<void> | void
   onReset?: () => void
-  chatMessages?: Array<{
-    id: string
-    role: "user" | "assistant" | "system"
-    author: "USER" | "BOSS" | "SYSTEM"
-    content: string
-    time: string
-  }>
+  chatMessages?: ProjectChatMessage[]
   chatBusy?: boolean
   chatPlaceholder?: string
   chatQuickPrompts?: string[]
   onSendChat?: (message: string) => Promise<void> | void
+}
+
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+})
+
+function formatLocalTime(timestamp?: number, fallback = "—") {
+  if (typeof timestamp !== "number" || Number.isNaN(timestamp)) {
+    return fallback
+  }
+
+  return timeFormatter.format(new Date(timestamp))
 }
 
 export function ProjectBoard({
@@ -227,7 +260,7 @@ export function ProjectBoard({
   onSendChat,
 }: ProjectBoardProps = {}) {
   const localBoard = useBoard(projectId)
-  const board = boardState ?? localBoard
+  const board: ProjectBoardData = boardState ?? localBoard
   const isInteractive =
     interactive ??
     Boolean(
@@ -240,10 +273,10 @@ export function ProjectBoard({
   const canReset = Boolean(!boardState && projectId) || Boolean(onReset)
 
   const [draft, setDraft] = useState("")
-  const [filter, setFilter] = useState<Role | "ALL">("ALL")
   const [forwarded, setForwarded] = useState(false)
   const [issueDialogOpen, setIssueDialogOpen] = useState(false)
   const forwardTimer = useRef<number | null>(null)
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const chatMode = Boolean(chatMessages || onSendChat)
   const hasStreamingMessage = Boolean(
     chatMessages?.some((message) => message.id === "__streaming-boss"),
@@ -264,6 +297,23 @@ export function ProjectBoard({
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!chatMode || !chatScrollRef.current) {
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const node = chatScrollRef.current
+      if (!node) return
+      node.scrollTo({
+        top: node.scrollHeight,
+        behavior: "smooth",
+      })
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [chatMode, chatMessages, chatBusy])
 
   const handleSprintSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -292,16 +342,29 @@ export function ProjectBoard({
 
   const cards = board.cards
   const activity = board.activity
+  const activeRuns = useMemo(() => {
+    if (board.activeRuns && board.activeRuns.length > 0) {
+      return board.activeRuns
+        .slice()
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+    }
 
-  const roleCounts = useMemo(() => {
-    const c: Record<Role, number> = { PM: 0, ENG: 0, QA: 0 }
-    cards.forEach((x) => (c[x.agent] += 1))
-    return c
-  }, [cards])
-
-  const visibleCards = useMemo(
-    () => (filter === "ALL" ? cards : cards.filter((c) => c.agent === filter)),
-    [filter, cards],
+    return cards
+      .filter((card) => card.tone === "progress")
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((card) => ({
+        id: `progress-${card.id}`,
+        cardKey: card.id,
+        title: card.title,
+        agent: card.agent,
+        stage: "programmer" as const,
+        notes: "Implementation in progress.",
+        updatedAt: card.updatedAt,
+      }))
+  }, [board.activeRuns, cards])
+  const latestActivityLabel = formatLocalTime(
+    activity.length > 0 ? activity[activity.length - 1]?.createdAt : undefined,
+    activity.length > 0 ? activity[activity.length - 1]?.time : "—",
   )
 
   const stats = useMemo(() => {
@@ -373,50 +436,60 @@ export function ProjectBoard({
             </div>
           </div>
 
-          {/* Role filter chips */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setFilter("ALL")}
-              data-active={filter === "ALL"}
-              className="group inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-200 hover:-translate-y-px hover:text-foreground data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:bg-foreground data-[active=true]:text-background data-[active=true]:shadow-md"
-            >
-              All
-              <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground group-data-[active=true]:bg-background/20 group-data-[active=true]:text-background">
-                {cards.length}
-              </span>
-            </button>
-            {ROLES.map((role) => {
-              const a = AGENTS[AGENT_BY_ROLE[role]]
-              return (
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => setFilter(role)}
-                  data-active={filter === role}
-                  className="group inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-200 hover:-translate-y-px hover:text-foreground data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:shadow-md"
-                >
-                  <AgentStatusDot
-                    agent={AGENT_BY_ROLE[role]}
-                    className="h-2 w-2 rounded-full"
-                  />
-                  <AgentName
-                    agent={AGENT_BY_ROLE[role]}
-                    className="font-semibold group-data-[active=true]:text-foreground"
-                  >
-                    {a.name}
-                  </AgentName>
-                  <span className="font-mono text-[10px] text-muted-foreground">
-                    {roleCounts[role]}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
+          {activeRuns.length > 0 ? (
+            <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-sky-500 [animation:cp-breath_2s_ease-in-out_infinite]" />
+                <span className="text-sm font-semibold">Live now</span>
+                <span className="text-xs text-muted-foreground">
+                  {activeRuns.length} active task{activeRuns.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {activeRuns.map((run) => {
+                  const agentKey = AGENT_BY_ROLE[run.agent]
+                  const agentName = AGENTS[agentKey].name
+                  const statusLabel =
+                    run.stage === "qa"
+                      ? "Running checks"
+                      : "Writing code"
+                  return (
+                    <div
+                      key={run.id}
+                      className="rounded-xl border border-border bg-background/85 px-3 py-3 shadow-xs"
+                    >
+                      <div className="flex items-start gap-2">
+                        <AgentBadge agent={agentKey} size={24} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-foreground">
+                              {run.cardKey}
+                            </span>
+                            <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] font-semibold tracking-wider text-muted-foreground">
+                              {agentName}
+                            </span>
+                            <span className="ml-auto text-[10px] text-muted-foreground">
+                              {formatLocalTime(run.updatedAt)}
+                            </span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-[13px] text-foreground/85">
+                            {run.title}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {run.notes?.trim() || statusLabel}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {COLUMNS.map((col) => {
-              const list = visibleCards.filter((c) => c.tone === col.key)
+              const list = cards.filter((c) => c.tone === col.key)
               return (
                 <ColumnDropZone
                   key={col.key}
@@ -494,7 +567,7 @@ export function ProjectBoard({
               },
               {
                 k: "Last event",
-                v: activity.length > 0 ? activity[activity.length - 1].time : "—",
+                v: latestActivityLabel,
                 t:
                   activity.length > 0
                     ? activity[activity.length - 1].who.toString()
@@ -515,7 +588,7 @@ export function ProjectBoard({
         </section>
 
         {/* Chat sidecar */}
-        <aside className="sticky top-[72px] flex h-[calc(100dvh-88px)] flex-col rounded-2xl border border-border bg-card shadow-xs">
+        <aside className="flex h-[min(640px,calc(100dvh-2rem))] min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xs lg:sticky lg:top-[72px] lg:h-[calc(100dvh-128px)]">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-500 [animation:cp-breath_2s_ease-in-out_infinite]" />
@@ -535,16 +608,21 @@ export function ProjectBoard({
             </button>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
+          <div
+            ref={chatScrollRef}
+            className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm"
+          >
             {chatMode ? (
               <>
                 {chatMessages && chatMessages.length > 0 ? (
                   <>
                     <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
                       <div className="mb-1 font-semibold text-emerald-700">
-                        BOSS online
+                        Squad online
                       </div>
-                      Chat with the project manager directly. Messages are saved here.
+                      {activeRuns.length > 0
+                        ? `${activeRuns[0]?.cardKey} is currently in motion. Messages are saved here.`
+                        : "Chat with the agents directly. Messages are saved here."}
                     </div>
                     {chatMessages.map((message) => (
                       <ProjectChatRow key={message.id} message={message} />
@@ -586,10 +664,10 @@ export function ProjectBoard({
                     Nothing to report yet. File an issue to get the squad talking.
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
-                    <div className="mb-1 font-semibold text-emerald-700">Sprint live</div>
-                    {activity.length} event{activity.length === 1 ? "" : "s"} on the
-                    wire. Latest at {activity[activity.length - 1].time}.
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-foreground/80">
+                      <div className="mb-1 font-semibold text-emerald-700">Sprint live</div>
+                      {activity.length} event{activity.length === 1 ? "" : "s"} on the
+                    wire. Latest at {latestActivityLabel}.
                   </div>
                 )}
 
@@ -634,7 +712,7 @@ export function ProjectBoard({
               {chatMode ? (
                 <>
                   <span>⌘↵ to send · saved to this project</span>
-                  <span>BOSS thread</span>
+                  <span>Squad thread</span>
                 </>
               ) : (
                 <>
@@ -676,12 +754,7 @@ export function ProjectBoard({
 function ProjectChatRow({
   message,
 }: {
-  message: {
-    role: "user" | "assistant" | "system"
-    author: "USER" | "BOSS" | "SYSTEM"
-    content: string
-    time: string
-  }
+  message: ProjectChatMessage
 }) {
   if (message.role === "system" || message.author === "SYSTEM") {
     return (
@@ -690,7 +763,9 @@ function ProjectChatRow({
           <span className="font-mono text-[10px] uppercase tracking-wider">
             system
           </span>
-          <span className="ml-auto font-mono text-[10px]">{message.time}</span>
+          <span className="ml-auto font-mono text-[10px]">
+            {formatLocalTime(message.createdAt, message.time)}
+          </span>
         </div>
         <div className="mt-0.5 leading-snug [&_a]:underline [&_li]:my-0.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_strong]:font-semibold [&_ul]:ml-4 [&_ul]:list-disc">
           <Streamdown>{message.content}</Streamdown>
@@ -709,7 +784,7 @@ function ProjectChatRow({
           <div className="flex items-baseline gap-2">
             <span className="text-[13px] font-semibold">You</span>
             <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-              {message.time}
+              {formatLocalTime(message.createdAt, message.time)}
             </span>
           </div>
           <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">
@@ -720,17 +795,36 @@ function ProjectChatRow({
     )
   }
 
+  const agent =
+    message.author === "PROGRAMMER"
+      ? "enzo"
+      : message.author === "QA"
+        ? "quinn"
+        : "priya"
+  const label =
+    message.author === "PROGRAMMER"
+      ? "FIXER"
+      : message.author === "QA"
+        ? "TESTEES"
+        : "BOSS"
+  const role =
+    message.author === "PROGRAMMER"
+      ? "ENG"
+      : message.author === "QA"
+        ? "QA"
+        : "PM"
+
   return (
     <div className="group flex gap-2.5 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted/40">
-      <AgentBadge agent="priya" size={28} />
+      <AgentBadge agent={agent} size={28} />
       <div className="flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="text-[13px] font-semibold">BOSS</span>
+          <span className="text-[13px] font-semibold">{label}</span>
           <span className="rounded-full bg-muted px-1.5 py-0 font-mono text-[9px] font-semibold tracking-wider text-muted-foreground">
-            PM
+            {role}
           </span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-            {message.time}
+            {formatLocalTime(message.createdAt, message.time)}
           </span>
         </div>
         <div className="mt-0.5 text-[13px] leading-snug text-foreground/90 [&_a]:underline [&_li]:my-0.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_strong]:font-semibold [&_ul]:ml-4 [&_ul]:list-disc">
@@ -749,7 +843,7 @@ function ProjectChatTyping() {
         <span className="h-1 w-1 animate-bounce rounded-full bg-amber-500 [animation-delay:120ms]" />
         <span className="h-1 w-1 animate-bounce rounded-full bg-amber-500 [animation-delay:240ms]" />
       </span>
-      <span className="font-semibold">BOSS</span> is typing…
+      <span className="font-semibold">Agent</span> is typing…
     </div>
   )
 }
@@ -796,7 +890,9 @@ function ActivityRow({ entry }: { entry: BoardActivityEntry }) {
       <div className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground">
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-[10px] uppercase tracking-wider">system</span>
-          <span className="ml-auto font-mono text-[10px]">{entry.time}</span>
+          <span className="ml-auto font-mono text-[10px]">
+            {formatLocalTime(entry.createdAt, entry.time)}
+          </span>
         </div>
         <p className="mt-0.5 leading-snug">{entry.text}</p>
       </div>
@@ -812,7 +908,7 @@ function ActivityRow({ entry }: { entry: BoardActivityEntry }) {
           <div className="flex items-baseline gap-2">
             <span className="text-[13px] font-semibold">You</span>
             <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-              {entry.time}
+              {formatLocalTime(entry.createdAt, entry.time)}
             </span>
           </div>
           <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">
@@ -837,7 +933,7 @@ function ActivityRow({ entry }: { entry: BoardActivityEntry }) {
             {role}
           </span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-            {entry.time}
+            {formatLocalTime(entry.createdAt, entry.time)}
           </span>
         </div>
         <p className="mt-0.5 text-[13px] leading-snug text-foreground/90">

@@ -8,11 +8,29 @@ type GitHubRepository = {
   html_url: string
 }
 
+type GitHubMergeCommit = {
+  sha: string
+}
+
+type GitHubPullRequest = {
+  number: number
+  html_url: string
+}
+
 type CreateProjectRepositoryArgs = {
   name: string
   slug: string
   description: string
   visibility: "private" | "public"
+}
+
+type MergeProjectBranchArgs = {
+  repoUrl: string
+  branchName: string
+  baseBranch?: string
+  title?: string
+  body?: string
+  commitMessage?: string
 }
 
 function githubHeaders(token: string) {
@@ -32,6 +50,15 @@ function normalizeRepoName(slug: string) {
     .replace(/-+/g, "-")
     .replace(/^[.-]+|[.-]+$/g, "")
     .slice(0, 90)
+}
+
+function parseGitHubRepoPath(repoUrl: string) {
+  const url = new URL(repoUrl)
+  const path = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "")
+  if (!path || path.split("/").length < 2) {
+    throw new Error("Project repository URL is not a valid GitHub repository URL.")
+  }
+  return path
 }
 
 export function getGitHubToken() {
@@ -160,4 +187,94 @@ export async function createProjectRepository(args: CreateProjectRepositoryArgs)
   }
 
   throw new Error(`Unable to create the GitHub repository: ${response.error}`)
+}
+
+export async function mergeProjectBranchIntoMain(args: MergeProjectBranchArgs) {
+  const token = getGitHubToken()
+  const repoPath = parseGitHubRepoPath(args.repoUrl)
+  const baseBranch = args.baseBranch ?? "main"
+  const title = args.title ?? `Merge ${args.branchName} into ${baseBranch}`
+
+  const pullRequest = await githubJson<GitHubPullRequest>(
+    `https://api.github.com/repos/${repoPath}/pulls`,
+    {
+      method: "POST",
+      headers: githubHeaders(token),
+      body: JSON.stringify({
+        title,
+        head: args.branchName,
+        base: baseBranch,
+        body: args.body ?? "Automated implementation branch prepared by Codapac.",
+      }),
+      cache: "no-store",
+    },
+  )
+
+  if (pullRequest.ok) {
+    const merged = await githubJson<GitHubMergeCommit>(
+      `https://api.github.com/repos/${repoPath}/pulls/${pullRequest.data.number}/merge`,
+      {
+        method: "PUT",
+        headers: githubHeaders(token),
+        body: JSON.stringify({
+          commit_title: args.commitMessage ?? title,
+          commit_message: args.body ?? "",
+          merge_method: "merge",
+        }),
+        cache: "no-store",
+      },
+    )
+
+    if (merged.ok) {
+      return merged.data
+    }
+
+    throw new Error(
+      `Unable to merge pull request #${pullRequest.data.number} into ${baseBranch}: ${merged.error}`,
+    )
+  }
+
+  const response = await githubJson<GitHubMergeCommit | null>(
+    `https://api.github.com/repos/${repoPath}/merges`,
+    {
+      method: "POST",
+      headers: githubHeaders(token),
+      body: JSON.stringify({
+        base: baseBranch,
+        head: args.branchName,
+        commit_message:
+          args.commitMessage ??
+          `Merge ${args.branchName} into ${baseBranch}`,
+      }),
+      cache: "no-store",
+    },
+  )
+
+  if (response.ok) {
+    return response.data
+  }
+
+  throw new Error(
+    `Unable to create or merge ${args.branchName} into ${baseBranch}: ${pullRequest.error}; ${response.error}`,
+  )
+}
+
+export async function deleteProjectRepository(repoUrl: string) {
+  const token = getGitHubToken()
+  const repoPath = parseGitHubRepoPath(repoUrl)
+
+  const response = await fetch(`https://api.github.com/repos/${repoPath}`, {
+    method: "DELETE",
+    headers: githubHeaders(token),
+    cache: "no-store",
+  })
+
+  if (response.status === 204 || response.status === 404) {
+    return
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown
+  throw new Error(
+    `Unable to delete the GitHub repository: ${summarizeGitHubError(payload)}`,
+  )
 }

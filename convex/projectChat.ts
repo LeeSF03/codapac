@@ -17,6 +17,8 @@ const chatRoleValidator = v.union(
 const chatAuthorValidator = v.union(
   v.literal("USER"),
   v.literal("BOSS"),
+  v.literal("PROGRAMMER"),
+  v.literal("QA"),
   v.literal("SYSTEM"),
 )
 
@@ -169,7 +171,7 @@ export const getProjectContext = query({
         q.eq("projectId", args.projectId),
       )
       .order("desc")
-      .take(12)
+      .take(40)
 
     return {
       project: {

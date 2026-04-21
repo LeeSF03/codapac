@@ -94,7 +94,7 @@ export function VerifyOtpForm({ email }: VerifyOtpFormProps) {
       const session = await authClient.getSession()
       const username = session.data?.user.username
 
-      router.replace(username ? "/" : "/sign-in/username")
+      router.replace(username ? "/project" : "/sign-in/username")
     })
   }
 

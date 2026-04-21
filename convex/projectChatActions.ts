@@ -7,7 +7,7 @@ import { action } from "./_generated/server"
 type ContextMessage = {
   id: Id<"projectChatMessages">
   role: "user" | "assistant" | "system"
-  author: "USER" | "BOSS" | "SYSTEM"
+  author: "USER" | "BOSS" | "PROGRAMMER" | "QA" | "SYSTEM"
   content: string
   createdAt: number
 }

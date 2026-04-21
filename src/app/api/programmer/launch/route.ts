@@ -5,6 +5,7 @@ import { createProjectRepository } from "@/lib/boss/github"
 import { ensureVercelProject } from "@/lib/boss/vercel"
 import { runProgrammerWithOpencode } from "@/lib/programmer/opencode"
 import { fetchAuthMutation, getAuthUser } from "@/lib/auth-server"
+import { embedText } from "@/lib/boss/embeddings"
 
 import { api } from "~/convex/_generated/api"
 import type { Id } from "~/convex/_generated/dataModel"
@@ -13,11 +14,31 @@ export const runtime = "nodejs"
 
 const launchBodySchema = z.object({
   projectId: z.string().min(1),
-  cardKey: z.string().trim().min(1),
+  cardKey: z.string().trim().min(1).optional(),
+  cardKeys: z.array(z.string().trim().min(1)).min(1).max(5).optional(),
+}).refine((value) => Boolean(value.cardKey || value.cardKeys?.length), {
+  message: "cardKey or cardKeys is required.",
 })
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Programmer failed."
+}
+
+async function saveProgrammerMessage(
+  projectId: Id<"projects">,
+  content: string,
+) {
+  try {
+    await fetchAuthMutation(api.projectChat.saveMessage, {
+      projectId,
+      role: "assistant",
+      author: "PROGRAMMER",
+      content,
+      embedding: embedText(content),
+    })
+  } catch (error) {
+    console.error("Unable to save Programmer chat message", error)
+  }
 }
 
 export async function POST(request: Request) {
@@ -31,18 +52,40 @@ export async function POST(request: Request) {
   }
 
   const projectId = parsedBody.data.projectId as Id<"projects">
-  const cardKey = parsedBody.data.cardKey
+  const cardKeys = Array.from(
+    new Set([
+      ...(parsedBody.data.cardKeys ?? []),
+      ...(parsedBody.data.cardKey ? [parsedBody.data.cardKey] : []),
+    ]),
+  )
   const externalRunId = `programmer-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
 
-  const claim = await fetchAuthMutation(api.projects.claimProgrammerExecution, {
-    projectId,
-    cardKey,
-    externalRunId,
-  })
+  const claims = (
+    await Promise.all(
+      cardKeys.map((cardKey) =>
+        fetchAuthMutation(api.projects.claimProgrammerExecution, {
+          projectId,
+          cardKey,
+          externalRunId,
+        }),
+      ),
+    )
+  ).filter((claim) => claim !== null)
 
-  if (!claim) {
+  if (claims.length === 0) {
     return NextResponse.json({ status: "noop" }, { status: 202 })
   }
+
+  const claim = claims[0]
+  const taskLabel =
+    claims.length === 1
+      ? `${claim.card.cardKey}: ${claim.card.title}`
+      : `${claims.length} grouped tasks (${claims.map((item) => item.card.cardKey).join(", ")})`
+
+  await saveProgrammerMessage(
+    projectId,
+    `I'm starting ${taskLabel}. I'll merge it when the work is ready, then QA can check it.`,
+  )
 
   let repoUrl = claim.project.repoUrl
   let vercelProjectId = claim.project.vercelProjectId ?? null
@@ -63,6 +106,7 @@ export async function POST(request: Request) {
     const vercelProject = await ensureVercelProject({
       name: claim.project.name,
       slug: claim.project.slug,
+      repoUrl,
     })
     vercelProjectId = vercelProject.id
     const readyRepoUrl = repoUrl
@@ -80,30 +124,46 @@ export async function POST(request: Request) {
         vercelTeamId: vercelProject.teamId,
         vercelToken: vercelProject.token,
       },
-      card: claim.card,
+      cards: claims.map((item) => item.card),
       onStarted: async ({ sandboxId, commandId, branchName }) => {
-        await fetchAuthMutation(api.projects.markProgrammerExecutionStarted, {
-          projectId,
-          jobId: claim.jobId,
-          repoUrl: readyRepoUrl,
-          vercelProjectId: readyVercelProjectId,
-          branchName,
-          sandboxId,
-          commandId,
-          notes: "Programmer is working on the task.",
-        })
+        await Promise.all(
+          claims.map((item) =>
+            fetchAuthMutation(api.projects.markProgrammerExecutionStarted, {
+              projectId,
+              jobId: item.jobId,
+              repoUrl: readyRepoUrl,
+              vercelProjectId: readyVercelProjectId,
+              branchName,
+              sandboxId,
+              commandId,
+              notes:
+                claims.length === 1
+                  ? "Programmer is working on the task."
+                  : "Programmer is working on this grouped change.",
+            }),
+          ),
+        )
       },
     })
 
     stage = "saving the Programmer result"
-    await fetchAuthMutation(api.projects.completeProgrammerExecution, {
+    await Promise.all(
+      claims.map((item) =>
+        fetchAuthMutation(api.projects.completeProgrammerExecution, {
+          projectId,
+          jobId: item.jobId,
+          repoUrl: readyRepoUrl,
+          vercelProjectId: readyVercelProjectId,
+          branchName: result.branchName,
+          summary: result.summary.slice(0, 1_500),
+        }),
+      ),
+    )
+
+    await saveProgrammerMessage(
       projectId,
-      jobId: claim.jobId,
-      repoUrl: readyRepoUrl,
-      vercelProjectId: readyVercelProjectId,
-      branchName: result.branchName,
-      summary: result.summary.slice(0, 1_500),
-    })
+      `I finished ${taskLabel} and merged it. QA is ready to check it next.`,
+    )
 
     return NextResponse.json({
       status: "completed",
@@ -111,18 +171,27 @@ export async function POST(request: Request) {
       vercelProjectId,
       branchName: result.branchName,
       branchUrl: result.branchUrl,
+      cardKeys: claims.map((item) => item.card.cardKey),
     })
   } catch (error) {
     const message = `Programmer launch failed while ${stage}: ${errorMessage(error)}`
 
     try {
-      await fetchAuthMutation(api.projects.failProgrammerExecution, {
+      await Promise.all(
+        claims.map((item) =>
+          fetchAuthMutation(api.projects.failProgrammerExecution, {
+            projectId,
+            jobId: item.jobId,
+            repoUrl,
+            vercelProjectId,
+            error: message.slice(0, 1_500),
+          }),
+        ),
+      )
+      await saveProgrammerMessage(
         projectId,
-        jobId: claim.jobId,
-        repoUrl,
-        vercelProjectId,
-        error: message.slice(0, 1_500),
-      })
+        `I couldn't finish ${taskLabel}. I moved the task${claims.length === 1 ? "" : "s"} back to To Do so ${claims.length === 1 ? "it" : "they"} can be retried.`,
+      )
     } catch (failureUpdateError) {
       console.error("Unable to record Programmer failure", failureUpdateError)
     }

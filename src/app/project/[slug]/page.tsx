@@ -10,9 +10,31 @@ import { useMutation, useQuery } from "convex/react"
 
 import { ProjectBoard } from "@/components/project-board"
 import { SiteHeader } from "@/components/site-header"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { projectColor } from "@/lib/mock-projects"
 import { api } from "~/convex/_generated/api"
+
+type StreamingAgentAuthor = "BOSS" | "PROGRAMMER" | "QA"
+
+type ErrorDialogState = {
+  title: string
+  description: string
+}
+
+type DeploymentNoticeState = {
+  url: string
+}
 
 function planningMessage(status: string) {
   if (status === "queued") {
@@ -28,6 +50,68 @@ function planningMessage(status: string) {
     return "BOSS has already created the first task list for this project."
   }
   return null
+}
+
+function toFriendlyError(error: unknown, fallbackTitle: string): ErrorDialogState {
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message.trim()
+      : ""
+
+  if (
+    message.includes("Failed to start Programmer") ||
+    message.includes("Programmer launch failed")
+  ) {
+    return {
+      title: "Builder unavailable",
+      description:
+        "The builder could not start this task right now. Please try again in a moment.",
+    }
+  }
+
+  if (
+    message.includes("Failed to start QA") ||
+    message.includes("QA launch failed")
+  ) {
+    return {
+      title: "Testing unavailable",
+      description:
+        "The testing agent could not start right now. Please try again in a moment.",
+    }
+  }
+
+  if (
+    message.includes("Failed to send project chat message") ||
+    message.includes("did not include a stream")
+  ) {
+    return {
+      title: "Message not sent",
+      description:
+        "The project chat could not respond properly. Please send your message again.",
+    }
+  }
+
+  if (message.includes("Failed to move the task")) {
+    return {
+      title: "Task not updated",
+      description:
+        "The task could not be updated right now. Please try again.",
+    }
+  }
+
+  if (message.includes("Failed to delete project")) {
+    return {
+      title: "Project not deleted",
+      description:
+        "The project could not be deleted. Nothing was removed, so you can safely try again.",
+    }
+  }
+
+  return {
+    title: fallbackTitle,
+    description:
+      message || "Something went wrong. Please try again in a moment.",
+  }
 }
 
 export default function ProjectDetailPage() {
@@ -51,7 +135,6 @@ export default function ProjectDetailPage() {
   )
 
   const toggleStar = useMutation(api.projects.toggleStar)
-  const deleteProject = useMutation(api.projects.deleteProject)
   const createIssue = useMutation(api.projects.createIssue)
   const advanceCard = useMutation(api.projects.advanceCard)
   const regressCard = useMutation(api.projects.regressCard)
@@ -60,6 +143,14 @@ export default function ProjectDetailPage() {
   const convexAuthPending = projects === null
   const [chatBusy, setChatBusy] = useState(false)
   const [streamingReply, setStreamingReply] = useState<string | null>(null)
+  const [streamingAuthor, setStreamingAuthor] =
+    useState<StreamingAgentAuthor>("BOSS")
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [errorDialog, setErrorDialog] = useState<ErrorDialogState | null>(null)
+  const [deploymentNotice, setDeploymentNotice] =
+    useState<DeploymentNoticeState | null>(null)
+  const deploymentUrlRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     if (!project || project.planning.status !== "queued") {
@@ -79,6 +170,24 @@ export default function ProjectDetailPage() {
       },
       body: JSON.stringify({ projectId: project.id }),
     })
+  }, [project])
+
+  useEffect(() => {
+    if (!project) {
+      return
+    }
+
+    const nextUrl = project.latestPreviewDeploymentUrl ?? null
+    if (deploymentUrlRef.current === undefined) {
+      deploymentUrlRef.current = nextUrl
+      return
+    }
+
+    if (nextUrl && nextUrl !== deploymentUrlRef.current) {
+      setDeploymentNotice({ url: nextUrl })
+    }
+
+    deploymentUrlRef.current = nextUrl
   }, [project])
 
   if (
@@ -141,12 +250,81 @@ export default function ProjectDetailPage() {
           {
             id: "__streaming-boss",
             role: "assistant" as const,
-            author: "BOSS" as const,
+            author: streamingAuthor,
             content: streamingReply,
             time: "now",
+            createdAt: Date.now(),
           },
         ]
       : chatMessages
+
+  const launchQaForCard = async (cardKey: string, recoveryDepth = 0) => {
+    const response = await fetch("/api/qa/launch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: project.id,
+        cardKey,
+        recoveryDepth,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null
+      throw new Error(payload?.error || "Failed to start QA.")
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          status?: string
+          cardKey?: string
+        }
+      | null
+
+    if (
+      payload?.status === "reassigned_to_programmer" &&
+      recoveryDepth < 2
+    ) {
+      await launchProgrammerThenQa(payload.cardKey ?? cardKey, recoveryDepth + 1)
+      return
+    }
+
+    if (payload?.status === "qa_retry_needed" && recoveryDepth < 1) {
+      await launchQaForCard(cardKey, recoveryDepth + 1)
+    }
+  }
+
+  const launchProgrammerThenQa = async (
+    cardKeys: string | string[],
+    recoveryDepth = 0,
+  ) => {
+    const keys = Array.isArray(cardKeys) ? cardKeys : [cardKeys]
+    const response = await fetch("/api/programmer/launch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: project.id,
+        cardKeys: keys,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null
+      throw new Error(payload?.error || "Failed to start Programmer.")
+    }
+
+    for (const key of keys) {
+      await launchQaForCard(key, recoveryDepth)
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-background">
@@ -174,31 +352,18 @@ export default function ProjectDetailPage() {
           try {
             const card = board.cards.find((item) => item.id === cardKey)
             if (card?.tone === "todo") {
-              const response = await fetch("/api/programmer/launch", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  projectId: project.id,
-                  cardKey,
-                }),
-              })
+              await launchProgrammerThenQa(cardKey)
+              return
+            }
 
-              if (!response.ok) {
-                const payload = (await response.json().catch(() => null)) as
-                  | { error?: string }
-                  | null
-                throw new Error(payload?.error || "Failed to start Programmer.")
-              }
+            if (card?.tone === "done") {
+              await launchQaForCard(cardKey)
               return
             }
 
             await advanceCard({ projectId: project.id, cardKey })
           } catch (error) {
-            window.alert(
-              error instanceof Error ? error.message : "Failed to move the task.",
-            )
+            setErrorDialog(toFriendlyError(error, "Task update failed"))
           }
         }}
         onRegressCard={async (cardKey) => {
@@ -209,7 +374,7 @@ export default function ProjectDetailPage() {
         }}
         chatMessages={visibleChatMessages}
         chatBusy={chatBusy}
-        chatPlaceholder="Ask BOSS to clarify the goal, prioritise work, or suggest the next move."
+        chatPlaceholder="Ask the squad to clarify the goal, prioritise work, or build the next task."
         chatQuickPrompts={[
           "Summarize this project and tell me the best first milestone.",
           "Given the current board, what should BOSS prioritize next?",
@@ -218,7 +383,9 @@ export default function ProjectDetailPage() {
         onSendChat={async (message) => {
           setChatBusy(true)
           setStreamingReply(null)
+          setStreamingAuthor("BOSS")
           let completedStream = false
+
           try {
             const response = await fetch("/api/project/chat", {
               method: "POST",
@@ -242,6 +409,60 @@ export default function ProjectDetailPage() {
               throw new Error("Project chat response did not include a stream.")
             }
 
+            const responseAuthor = response.headers.get("x-codapac-chat-author")
+            setStreamingAuthor(
+              responseAuthor === "PROGRAMMER" || responseAuthor === "QA"
+                ? responseAuthor
+                : "BOSS",
+            )
+            const launchCardKeys = (
+              response.headers.get("x-codapac-launch-card-keys") ?? ""
+            )
+              .split(",")
+              .map((cardKey) => cardKey.trim())
+              .filter(Boolean)
+            const qaCardKeys = (
+              response.headers.get("x-codapac-qa-card-keys") ?? ""
+            )
+              .split(",")
+              .map((cardKey) => cardKey.trim())
+              .filter(Boolean)
+            const rawLaunchGroups = response.headers.get(
+              "x-codapac-launch-card-groups",
+            )
+            const launchGroups = rawLaunchGroups
+              ? (JSON.parse(decodeURIComponent(rawLaunchGroups)) as unknown)
+              : null
+            const groupedCardKeys =
+              Array.isArray(launchGroups) &&
+              launchGroups.every(
+                (group) =>
+                  Array.isArray(group) &&
+                  group.every((cardKey) => typeof cardKey === "string"),
+              )
+                ? (launchGroups as string[][])
+                : launchCardKeys.map((cardKey) => [cardKey])
+
+            if (groupedCardKeys.length > 0) {
+              void (async () => {
+                for (const launchGroup of groupedCardKeys) {
+                  await launchProgrammerThenQa(launchGroup)
+                }
+              })().catch((error: unknown) => {
+                setErrorDialog(toFriendlyError(error, "Builder unavailable"))
+              })
+            }
+
+            if (qaCardKeys.length > 0) {
+              void (async () => {
+                for (const qaCardKey of qaCardKeys) {
+                  await launchQaForCard(qaCardKey)
+                }
+              })().catch((error: unknown) => {
+                setErrorDialog(toFriendlyError(error, "Testing unavailable"))
+              })
+            }
+
             const reader = response.body.getReader()
             const decoder = new TextDecoder()
             let streamedText = ""
@@ -258,11 +479,7 @@ export default function ProjectDetailPage() {
             completedStream = true
           } catch (error) {
             setStreamingReply(null)
-            window.alert(
-              error instanceof Error
-                ? error.message
-                : "Failed to send project chat message.",
-            )
+            setErrorDialog(toFriendlyError(error, "Message not sent"))
           } finally {
             setChatBusy(false)
             if (completedStream) {
@@ -290,6 +507,19 @@ export default function ProjectDetailPage() {
         }
         description={
           <div className="space-y-1">
+            {project.latestPreviewDeploymentUrl ? (
+              <p className="text-xs text-muted-foreground">
+                <span>deployed at </span>
+                <a
+                  href={project.latestPreviewDeploymentUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-emerald-700 underline-offset-4 transition-colors hover:text-emerald-800 hover:underline"
+                >
+                  {project.latestPreviewDeploymentUrl.replace(/^https?:\/\//, "")}
+                </a>
+              </p>
+            ) : null}
             {project.description ? (
               <p>{project.description}</p>
             ) : (
@@ -360,26 +590,144 @@ export default function ProjectDetailPage() {
                 </svg>
                 {project.starred ? "Starred" : "Star"}
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                onClick={async () => {
-                  const ok = window.confirm(
-                    `Delete "${project.name}" from your live workspace?`,
-                  )
-                  if (!ok) return
-                  await deleteProject({ projectId: project.id })
-                  router.push("/project" as Route)
+              <AlertDialog
+                open={deleteDialogOpen}
+                onOpenChange={(open) => {
+                  if (!deleteBusy) {
+                    setDeleteDialogOpen(open)
+                  }
                 }}
-                className="text-muted-foreground hover:text-destructive"
               >
-                Delete
-              </Button>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete project?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete <strong>{project.name}</strong>,
+                      its board, chat history, GitHub repository, and Vercel
+                      project.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={deleteBusy}>
+                      Cancel
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={deleteBusy}
+                      onClick={async (event) => {
+                        event.preventDefault()
+                        try {
+                          setDeleteBusy(true)
+                          const response = await fetch("/api/project/delete", {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({ projectId: project.id }),
+                          })
+                          if (!response.ok) {
+                            const payload = (await response.json().catch(() => null)) as
+                              | { error?: string }
+                              | null
+                            throw new Error(
+                              payload?.error || "Failed to delete project.",
+                            )
+                          }
+                          setDeleteDialogOpen(false)
+                          router.push("/project" as Route)
+                        } catch (error) {
+                          setErrorDialog(
+                            toFriendlyError(error, "Project not deleted"),
+                          )
+                        } finally {
+                          setDeleteBusy(false)
+                        }
+                      }}
+                    >
+                      {deleteBusy ? "Deleting..." : "Delete project"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           </nav>
         }
       />
+      {deploymentNotice ? (
+        <div className="pointer-events-none fixed right-6 bottom-6 z-50">
+          <div className="pointer-events-auto w-[min(28rem,calc(100vw-3rem))] rounded-2xl border border-emerald-500/25 bg-card p-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">
+                  Project deployed successfully
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Your latest preview is live and ready to open.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button asChild size="sm">
+                    <a
+                      href={deploymentNotice.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open preview
+                    </a>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeploymentNotice(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <AlertDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setErrorDialog(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {errorDialog?.title ?? "Something went wrong"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {errorDialog?.description ??
+                "Please try again in a moment."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                setErrorDialog(null)
+              }}
+            >
+              OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

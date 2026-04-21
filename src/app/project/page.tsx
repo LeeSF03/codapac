@@ -354,7 +354,6 @@ export default function ProjectIndexPage() {
     color?: ProjectColor
     visibility?: ProjectVisibility
     repoUrl?: string
-    kickoffPrompt?: string
   }) => {
     try {
       const created = await createProject({
@@ -365,7 +364,6 @@ export default function ProjectIndexPage() {
         color: input.color ?? null,
         visibility: input.visibility ?? null,
         repoUrl: input.repoUrl ?? null,
-        kickoffPrompt: input.kickoffPrompt ?? null,
       })
       router.push(`/project/${created.slug}` as Route)
       return created
@@ -430,9 +428,8 @@ export default function ProjectIndexPage() {
               Projects
             </h1>
             <p className="text-muted-foreground mt-1 max-w-xl text-sm">
-              Every project gets its own autonomous board. Create one, add a
-              kickoff prompt if you want BOSS to plan the initial backlog, and
-              keep the mock routes separate from your real workspace data.
+              Every project gets its own autonomous board. Create one and keep
+              the mock routes separate from your real workspace data.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -452,40 +449,6 @@ export default function ProjectIndexPage() {
               New project
             </Button>
           </div>
-        </section>
-
-        <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            {
-              k: "Total",
-              v: counts.total.toString(),
-              t: "across your workspace",
-            },
-            {
-              k: "Starred",
-              v: counts.starred.toString(),
-              t: "pinned to the top",
-            },
-            { k: "Private", v: counts.private.toString(), t: "internal work" },
-            {
-              k: "Public",
-              v: counts.public.toString(),
-              t: "shared with the world",
-            },
-          ].map((s) => (
-            <div
-              key={s.k}
-              className="border-border bg-card hover:border-foreground/20 rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <div className="text-muted-foreground text-xs">{s.k}</div>
-              <div className="mt-1 text-2xl font-semibold tracking-tight">
-                {s.v}
-              </div>
-              <div className="text-muted-foreground mt-0.5 text-[11px]">
-                {s.t}
-              </div>
-            </div>
-          ))}
         </section>
 
         <section className="mt-7 flex flex-wrap items-center justify-between gap-3">
@@ -600,8 +563,7 @@ export default function ProjectIndexPage() {
                   Start a new project
                 </span>
                 <span className="text-muted-foreground max-w-[200px] text-[11.5px]">
-                  Name it, write a kickoff prompt, and let BOSS queue the first
-                  planning run.
+                  Name it and launch a fresh live workspace for the squad.
                 </span>
               </button>
             </div>

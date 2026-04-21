@@ -2,7 +2,7 @@
 
 import { Sandbox } from "@vercel/sandbox"
 
-import { getGitHubToken } from "@/lib/boss/github"
+import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
 import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
@@ -27,12 +27,13 @@ type ProgrammerCard = {
   acceptanceCriteria: string[]
   priority: "low" | "medium" | "high"
   tags: string[]
+  qaFeedback?: string | null
 }
 
 type ProgrammerRunInput = {
   externalRunId: string
   project: ProgrammerProject
-  card: ProgrammerCard
+  cards: ProgrammerCard[]
   onStarted?: (details: {
     sandboxId: string
     commandId: string | null
@@ -49,10 +50,15 @@ function safeBranchSegment(value: string) {
     .slice(0, 48)
 }
 
-function buildBranchName(card: ProgrammerCard, externalRunId: string) {
-  const title = safeBranchSegment(card.title) || "task"
+function buildBranchName(cards: ProgrammerCard[], externalRunId: string) {
+  const firstCard = cards[0]
+  const title = safeBranchSegment(firstCard?.title ?? "task") || "task"
+  const key =
+    cards.length === 1
+      ? firstCard?.cardKey.toLowerCase()
+      : `group-${firstCard?.cardKey.toLowerCase() ?? "task"}-${cards.length}`
   const suffix = safeBranchSegment(externalRunId).slice(-10) || Date.now().toString(36)
-  return `codapac/${card.cardKey.toLowerCase()}-${title}-${suffix}`.slice(0, 120)
+  return `codapac/${key}-${title}-${suffix}`.slice(0, 120)
 }
 
 function parseGitHubRepoPath(repoUrl: string) {
@@ -112,15 +118,34 @@ function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
   )
 }
 
-function buildPrompt(project: ProgrammerProject, card: ProgrammerCard) {
+function formatTaskForPrompt(card: ProgrammerCard, index: number) {
   const criteria =
     card.acceptanceCriteria.length > 0
-      ? card.acceptanceCriteria.map((item) => `- ${item}`).join("\n")
-      : "- The requested result is visible and ready to review."
+      ? card.acceptanceCriteria.map((item) => `  - ${item}`).join("\n")
+      : "  - The requested result is visible and ready to review."
 
   return [
+    `Task ${index + 1}: ${card.cardKey} - ${card.title}`,
+    `Priority: ${card.priority}`,
+    `Labels: ${card.tags.length > 0 ? card.tags.join(", ") : "none"}`,
+    "Description:",
+    card.description || card.title,
+    card.qaFeedback
+      ? ["QA feedback to fix:", card.qaFeedback.slice(0, 1_200)].join("\n")
+      : "",
+    "Acceptance checklist:",
+    criteria,
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function buildPrompt(project: ProgrammerProject, cards: ProgrammerCard[]) {
+  return [
     "You are the programmer agent for this repository.",
-    "Implement exactly one task. Do not ask follow-up questions.",
+    cards.length === 1
+      ? "Implement exactly one task. Do not ask follow-up questions."
+      : "Implement the grouped tasks together in one cohesive change. Do not ask follow-up questions.",
     "Keep the change focused, practical, and complete enough for review.",
     "Run relevant checks if the repository makes them obvious.",
     "Do not commit or push. The host application will handle git after you finish.",
@@ -128,15 +153,8 @@ function buildPrompt(project: ProgrammerProject, card: ProgrammerCard) {
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
     "",
-    `Task: ${card.cardKey} - ${card.title}`,
-    `Priority: ${card.priority}`,
-    `Labels: ${card.tags.length > 0 ? card.tags.join(", ") : "none"}`,
-    "",
-    "Task description:",
-    card.description || card.title,
-    "",
-    "Acceptance checklist:",
-    criteria,
+    "Tasks to implement:",
+    cards.map(formatTaskForPrompt).join("\n\n"),
     "",
     "When done, summarize what changed and what you checked.",
   ].join("\n")
@@ -150,11 +168,26 @@ async function assertCommand(
     return
   }
 
-  const stderr = "stderr" in command ? await command.stderr() : ""
-  const stdout = "stdout" in command ? await command.stdout() : ""
+  const stderr = "stderr" in command ? await safeCommandOutput(command, "stderr") : ""
+  const stdout = "stdout" in command ? await safeCommandOutput(command, "stdout") : ""
   const details = redactSensitiveOutput([stderr, stdout].filter(Boolean).join("\n"))
     .slice(0, 1_500)
   throw new Error(`${label} failed.${details ? ` ${details}` : ""}`)
+}
+
+async function safeCommandOutput(
+  command: Awaited<ReturnType<Sandbox["runCommand"]>>,
+  stream: "stdout" | "stderr",
+) {
+  if (!(stream in command)) {
+    return ""
+  }
+
+  try {
+    return await command[stream]()
+  } catch (error) {
+    return describeSandboxError(error)
+  }
 }
 
 function redactSensitiveOutput(value: string) {
@@ -203,7 +236,12 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
   const kimiToken = getKimiToken()
   const kimiModel = getKimiModel()
   const modelId = opencodeModelId("moonshot", kimiModel)
-  const branchName = buildBranchName(input.card, input.externalRunId)
+  const cards = input.cards
+  if (cards.length === 0) {
+    throw new Error("Programmer needs at least one task to run.")
+  }
+
+  const branchName = buildBranchName(cards, input.externalRunId)
   const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
   const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
 
@@ -285,9 +323,11 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
           "--format",
           "json",
           "--title",
-          `${input.card.cardKey} programmer task`,
+          cards.length === 1
+            ? `${cards[0].cardKey} programmer task`
+            : `${cards.length} grouped programmer tasks`,
           "--dangerously-skip-permissions",
-          buildPrompt(input.project, input.card),
+          buildPrompt(input.project, cards),
         ],
         cwd: WORKDIR,
         env: {
@@ -296,7 +336,9 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
       }),
     )
     await assertCommand(run, "Running OpenCode")
-    const opencodeOutput = "stdout" in run ? (await run.stdout()).trim() : ""
+    const opencodeOutput = "stdout" in run
+      ? (await safeCommandOutput(run, "stdout")).trim()
+      : ""
 
     const status = await sandboxStep("Checking repository changes", () =>
       sandbox.runCommand({
@@ -306,7 +348,9 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
       }),
     )
     await assertCommand(status, "Checking repository changes")
-    const changedFiles = "stdout" in status ? (await status.stdout()).trim() : ""
+    const changedFiles = "stdout" in status
+      ? (await safeCommandOutput(status, "stdout")).trim()
+      : ""
     if (!changedFiles) {
       throw new Error("Programmer finished without creating any file changes.")
     }
@@ -355,7 +399,13 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
       await sandboxStep("Committing programmer changes", () =>
         sandbox.runCommand({
           cmd: "git",
-          args: ["commit", "-m", `Implement ${input.card.cardKey}: ${input.card.title}`],
+          args: [
+            "commit",
+            "-m",
+            cards.length === 1
+              ? `Implement ${cards[0].cardKey}: ${cards[0].title}`
+              : `Implement grouped tasks: ${cards.map((card) => card.cardKey).join(", ")}`,
+          ],
           cwd: WORKDIR,
         }),
       ),
@@ -372,12 +422,34 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
       "Pushing programmer changes",
     )
 
+    await sandboxStep("Merging programmer changes into main", () =>
+      mergeProjectBranchIntoMain({
+        repoUrl: input.project.repoUrl,
+        branchName,
+        baseBranch: "main",
+        title:
+          cards.length === 1
+            ? `Implement ${cards[0].cardKey}: ${cards[0].title}`
+            : `Implement grouped tasks: ${cards.map((card) => card.cardKey).join(", ")}`,
+        body: [
+          "Programmer completed these tasks:",
+          ...cards.map((card) => `- ${card.cardKey}: ${card.title}`),
+        ].join("\n"),
+        commitMessage:
+          cards.length === 1
+            ? `Merge ${cards[0].cardKey}: ${cards[0].title}`
+            : `Merge grouped tasks: ${cards.map((card) => card.cardKey).join(", ")}`,
+      }),
+    )
+
     return {
       branchName,
       branchUrl: publicBranchUrl(input.project.repoUrl, branchName),
-      summary: opencodeOutput.slice(-2_000) || "Programmer finished the task.",
+      summary:
+        opencodeOutput.slice(-2_000) ||
+        "Programmer finished the task and merged it into main.",
     }
   } finally {
-    await sandbox.stop().catch(() => null)
+    await sandbox.stop({ blocking: true }).catch(() => null)
   }
 }
