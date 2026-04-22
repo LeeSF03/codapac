@@ -6,7 +6,7 @@ import { GoogleSignInButton } from "./google-sign-in-button"
 
 export function SignInCard() {
   return (
-    <Card className="border-border bg-card w-full max-w-md rounded-2xl p-7 shadow-lg">
+    <Card className="w-full max-w-md rounded-2xl border-border bg-card/90 p-7 shadow-xl ring-1 ring-foreground/5 backdrop-blur-md">
       <h2 className="text-2xl font-semibold tracking-tight">
         Sign in to codapac
       </h2>
