@@ -72,9 +72,10 @@
   --card-foreground: oklch(0.9551 0 0);
   --popover: oklch(0.2138 0.0019 286.2347);
   --popover-foreground: oklch(0.9551 0 0);
-  --primary: oklch(0.6404 0.2153 35.9003);
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.5646 0.1905 35.5743);
+  /* Softer, less hot primary orange for dark mode */
+  --primary: oklch(0.685 0.155 40);
+  --primary-foreground: oklch(0.16 0 0);
+  --secondary: oklch(0.5646 0.14 35.5743);
   --secondary-foreground: oklch(0.9551 0 0);
   --muted: oklch(0.257 0.0037 286.136);
   --muted-foreground: oklch(0.6731 0 0);

@@ -57,7 +57,7 @@ export default function DashboardPage() {
           </p>
           <div className="mt-5">
             <Button asChild size="sm">
-              <Link href={"/mock/projects" as Route}>Go to projects</Link>
+              <Link href={"/project" as Route}>Go to projects</Link>
             </Button>
           </div>
         </main>
@@ -115,7 +115,7 @@ export default function DashboardPage() {
             </span>{" "}
             project.{" "}
             <Link
-              href={"/mock/projects" as Route}
+              href={"/project" as Route}
               className="font-medium text-primary underline-offset-2 hover:underline"
             >
               Switch project →

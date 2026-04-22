@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { Route } from "next"
 import Link from "next/link"
@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-import { NewProjectDialog } from "@/app/mock/projects/_components/new-project-dialog"
+import { NewProjectDialog } from "@/app/project/_components/new-project-dialog"
 import { authClient } from "@/lib/auth-client"
 import {
   type ProjectColor,
@@ -26,7 +26,7 @@ import {
 import { api } from "~/convex/_generated/api"
 import type { Id } from "~/convex/_generated/dataModel"
 
-type Filter = "all" | "starred" | ProjectVisibility | "archived"
+type Filter = "all" | "starred" | "archived"
 type Sort = "updated" | "created" | "name"
 type PlanningStatus =
   | "idle"
@@ -61,11 +61,15 @@ type LiveProject = {
   }
 }
 
+const SORT_OPTIONS: { key: Sort; label: string; hint: string }[] = [
+  { key: "updated", label: "Last updated", hint: "Most recent activity first" },
+  { key: "created", label: "Recently created", hint: "Newest projects first" },
+  { key: "name", label: "Name", hint: "A to Z" },
+]
+
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "starred", label: "Starred" },
-  { key: "private", label: "Private" },
-  { key: "public", label: "Public" },
   { key: "archived", label: "Archived" },
 ]
 
@@ -213,41 +217,6 @@ function ProjectCard({
           <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
           {status.title}
         </Badge>
-        <Badge
-          variant="outline"
-          className="gap-1.5 rounded-full px-2 py-0 text-[10px] font-medium capitalize"
-        >
-          {project.visibility === "private" ? (
-            <svg
-              viewBox="0 0 24 24"
-              className="size-3"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <rect x="3" y="11" width="18" height="11" rx="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-          ) : (
-            <svg
-              viewBox="0 0 24 24"
-              className="size-3"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
-            </svg>
-          )}
-          {project.visibility}
-        </Badge>
         <span
           className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${accent.chip}`}
         >
@@ -285,6 +254,123 @@ function ProjectCard({
   )
 }
 
+function SortMenu({
+  value,
+  onChange,
+}: {
+  value: Sort
+  onChange: (next: Sort) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const current = SORT_OPTIONS.find((option) => option.key === value) ??
+    SORT_OPTIONS[0]
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointer = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("mousedown", handlePointer)
+    document.addEventListener("keydown", handleKey)
+    return () => {
+      document.removeEventListener("mousedown", handlePointer)
+      document.removeEventListener("keydown", handleKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Sort by ${current.label}`}
+        onClick={() => setOpen((prev) => !prev)}
+        className="group border-border bg-card text-foreground hover:border-foreground/20 focus-visible:border-ring focus-visible:ring-ring/40 inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium shadow-xs transition-colors outline-none focus-visible:ring-3"
+      >
+        <span className="truncate">{current.label}</span>
+        <svg
+          viewBox="0 0 24 24"
+          className={`text-muted-foreground size-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open ? (
+        <div
+          role="listbox"
+          aria-label="Sort projects"
+          className="border-border bg-popover text-popover-foreground absolute right-0 z-30 mt-1.5 w-56 origin-top-right overflow-hidden rounded-xl border p-1 shadow-lg ring-1 ring-black/5 dark:ring-white/5"
+        >
+          {SORT_OPTIONS.map((option) => {
+            const active = option.key === value
+            return (
+              <button
+                key={option.key}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(option.key)
+                  setOpen(false)
+                }}
+                className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors ${
+                  active
+                    ? "bg-muted text-foreground"
+                    : "text-foreground/90 hover:bg-muted/70"
+                }`}
+              >
+                <span
+                  className={`mt-[3px] grid size-4 shrink-0 place-items-center rounded-full border ${
+                    active
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-transparent text-transparent"
+                  }`}
+                  aria-hidden
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="size-2.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="m5 12 5 5L20 7" />
+                  </svg>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] font-medium">
+                    {option.label}
+                  </span>
+                  <span className="text-muted-foreground block text-[11px]">
+                    {option.hint}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function ProjectIndexPage() {
   const router = useRouter()
   const { data: session, isPending } = authClient.useSession()
@@ -308,9 +394,6 @@ export default function ProjectIndexPage() {
     if (filter === "starred") list = list.filter((p) => p.starred)
     else if (filter === "archived")
       list = list.filter((p) => p.status === "archived")
-    else if (filter === "private" || filter === "public") {
-      list = list.filter((p) => p.visibility === filter)
-    }
     if (filter !== "archived") {
       list = list.filter((p) => p.status !== "archived")
     }
@@ -335,8 +418,6 @@ export default function ProjectIndexPage() {
     return {
       total: list.length,
       starred: list.filter((p) => p.starred).length,
-      private: list.filter((p) => p.visibility === "private").length,
-      public: list.filter((p) => p.visibility === "public").length,
       archived: list.filter((p) => p.status === "archived").length,
     }
   }, [projects])
@@ -428,8 +509,8 @@ export default function ProjectIndexPage() {
               Projects
             </h1>
             <p className="text-muted-foreground mt-1 max-w-xl text-sm">
-              Every project gets its own autonomous board. Create one and keep
-              the mock routes separate from your real workspace data.
+              Every project gets its own autonomous board. Spin one up and the
+              squad will start picking up issues the moment they land.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -492,18 +573,12 @@ export default function ProjectIndexPage() {
                 aria-label="Search projects"
               />
             </div>
-            <label className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
-              <span className="tracking-[0.14em] uppercase">Sort</span>
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as Sort)}
-                className="border-input text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-lg border bg-transparent px-2 text-xs transition-colors outline-none focus-visible:ring-3"
-              >
-                <option value="updated">Last updated</option>
-                <option value="created">Recently created</option>
-                <option value="name">Name</option>
-              </select>
-            </label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground text-[11px] tracking-[0.14em] uppercase">
+                Sort
+              </span>
+              <SortMenu value={sort} onChange={setSort} />
+            </div>
           </div>
         </section>
 
@@ -519,7 +594,7 @@ export default function ProjectIndexPage() {
               <p className="text-muted-foreground mt-1 max-w-xs text-xs">
                 {query
                   ? "Try a different search, or clear the filters to see everything."
-                  : "Create your first live project and keep the mock board isolated under /mock."}
+                  : "Create your first project and drop the first issues on the board."}
               </p>
               <div className="mt-4 flex gap-2">
                 {query ? (

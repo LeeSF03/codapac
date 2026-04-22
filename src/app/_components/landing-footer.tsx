@@ -21,7 +21,7 @@ export function LandingFooter() {
             Board
           </Link>
           <Link
-            href="/mock/agents"
+            href="/agents"
             className="hover:text-foreground transition-colors"
           >
             Team

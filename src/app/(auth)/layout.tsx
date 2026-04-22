@@ -6,7 +6,7 @@ export default function AuthLayout({
   children: React.ReactNode
 }>) {
   return (
-    <div className="bg-background flex h-dvh flex-col overflow-hidden">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-background">
       <AuthHeader />
       {children}
     </div>
