@@ -1,4 +1,4 @@
-import type { Route } from "next"
+import type { Metadata, Route } from "next"
 import { redirect } from "next/navigation"
 
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
@@ -6,14 +6,16 @@ import { getAuthUser, hasUsername } from "@/lib/auth-server"
 import { SignInCard } from "./_components/sign-in-card"
 import { BotConstellation, ContourBackdrop } from "./_components/sign-in-stage"
 
+export const metadata: Metadata = {
+  title: "Sign in",
+}
+
 export default async function SignInPage() {
   const user = await getAuthUser()
 
   if (user) {
     redirect(
-      hasUsername(user)
-        ? ("/project" as Route)
-        : ("/sign-in/username" as Route),
+      hasUsername(user) ? ("/project" as Route) : ("/sign-in/username" as Route)
     )
   }
 
@@ -25,16 +27,16 @@ export default async function SignInPage() {
         {/* Left: headline + bot constellation */}
         <section className="hidden h-full min-h-0 flex-col justify-center gap-6 lg:flex">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+            <p className="text-muted-foreground text-[11px] tracking-[0.22em] uppercase">
               Meet the squad
             </p>
-            <h1 className="mt-2 max-w-xl text-[40px] font-semibold leading-[1.05] tracking-tight">
+            <h1 className="mt-2 max-w-xl text-[40px] leading-[1.05] font-semibold tracking-tight">
               Your autonomous engineering team,{" "}
               <span className="text-muted-foreground">
                 waiting on a sign in.
               </span>
             </h1>
-            <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+            <p className="text-muted-foreground mt-3 max-w-md text-sm leading-relaxed">
               <span className="font-semibold text-amber-700">BOSS</span> scopes
               the issue,{" "}
               <span className="font-semibold text-sky-700">FIXER</span> welds
