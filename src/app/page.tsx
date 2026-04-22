@@ -1,18 +1,22 @@
-import type { Route } from "next"
+import type { Metadata, Route } from "next"
 import { redirect } from "next/navigation"
 
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { LandingPage } from "./_components/landing-page"
 
+export const metadata: Metadata = {
+  title: {
+    absolute: "CodaPac",
+  },
+}
+
 export default async function Home() {
   const user = await getAuthUser()
 
   if (user) {
     redirect(
-      hasUsername(user)
-        ? ("/project" as Route)
-        : ("/sign-in/username" as Route),
+      hasUsername(user) ? ("/project" as Route) : ("/sign-in/username" as Route)
     )
   }
 
