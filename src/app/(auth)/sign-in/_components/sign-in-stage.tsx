@@ -12,14 +12,17 @@ import {
 export function ContourBackdrop() {
   return (
     <>
-      {/* warm radial wash */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_72%_28%,rgba(245,158,11,0.10),transparent_55%),radial-gradient(circle_at_18%_82%,rgba(14,165,233,0.07),transparent_55%),radial-gradient(circle_at_50%_50%,rgba(16,185,129,0.05),transparent_70%)]" />
+      {/* warm radial wash — light mode */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_72%_28%,rgba(245,158,11,0.10),transparent_55%),radial-gradient(circle_at_18%_82%,rgba(14,165,233,0.07),transparent_55%),radial-gradient(circle_at_50%_50%,rgba(16,185,129,0.05),transparent_70%)] dark:hidden" />
+
+      {/* warm radial wash — dark mode (stronger) */}
+      <div className="pointer-events-none absolute inset-0 hidden bg-[radial-gradient(circle_at_72%_28%,rgba(245,158,11,0.22),transparent_55%),radial-gradient(circle_at_18%_82%,rgba(14,165,233,0.18),transparent_55%),radial-gradient(circle_at_50%_50%,rgba(16,185,129,0.14),transparent_70%)] dark:block" />
 
       {/* amber contour cluster, top-right */}
       <svg
         aria-hidden
         viewBox="0 0 800 800"
-        className="pointer-events-none absolute -right-[25%] -top-[40%] h-[130%] w-[85%] text-amber-500/30 [animation:cp-orbit_90s_linear_infinite]"
+        className="pointer-events-none absolute -right-[25%] -top-[40%] h-[130%] w-[85%] text-amber-500/30 dark:text-amber-400/40 [animation:cp-orbit_90s_linear_infinite]"
       >
         <g fill="none" stroke="currentColor" strokeWidth="1">
           {Array.from({ length: 14 }).map((_, i) => (
@@ -40,7 +43,7 @@ export function ContourBackdrop() {
       <svg
         aria-hidden
         viewBox="0 0 800 800"
-        className="pointer-events-none absolute -bottom-[40%] -left-[25%] h-[130%] w-[85%] text-sky-500/20 [animation:cp-orbit-reverse_120s_linear_infinite]"
+        className="pointer-events-none absolute -bottom-[40%] -left-[25%] h-[130%] w-[85%] text-sky-500/20 dark:text-sky-400/35 [animation:cp-orbit-reverse_120s_linear_infinite]"
       >
         <g fill="none" stroke="currentColor" strokeWidth="1">
           {Array.from({ length: 12 }).map((_, i) => (
@@ -61,7 +64,7 @@ export function ContourBackdrop() {
       <svg
         aria-hidden
         viewBox="0 0 600 600"
-        className="pointer-events-none absolute top-[30%] right-[-10%] h-[60%] w-[40%] text-emerald-500/15 [animation:cp-orbit_150s_linear_infinite]"
+        className="pointer-events-none absolute top-[30%] right-[-10%] h-[60%] w-[40%] text-emerald-500/15 dark:text-emerald-400/30 [animation:cp-orbit_150s_linear_infinite]"
       >
         <g fill="none" stroke="currentColor" strokeWidth="1">
           {Array.from({ length: 9 }).map((_, i) => (
@@ -80,7 +83,7 @@ export function ContourBackdrop() {
 
       {/* faint dot grid with soft vignette */}
       <div className="pointer-events-none absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,black_30%,transparent_80%)]">
-        <div className="h-full w-full text-foreground opacity-[0.08] [background-image:radial-gradient(circle,_currentColor_1px,_transparent_1.5px)] [background-size:26px_26px]" />
+        <div className="h-full w-full text-foreground opacity-[0.08] [background-image:radial-gradient(circle,_currentColor_1px,_transparent_1.5px)] [background-size:26px_26px] dark:opacity-[0.14]" />
       </div>
     </>
   )

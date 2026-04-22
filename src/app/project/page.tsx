@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { Route } from "next"
 import Link from "next/link"
@@ -60,6 +60,12 @@ type LiveProject = {
     requestedAt?: number
   }
 }
+
+const SORT_OPTIONS: { key: Sort; label: string; hint: string }[] = [
+  { key: "updated", label: "Last updated", hint: "Most recent activity first" },
+  { key: "created", label: "Recently created", hint: "Newest projects first" },
+  { key: "name", label: "Name", hint: "A to Z" },
+]
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
@@ -285,6 +291,123 @@ function ProjectCard({
   )
 }
 
+function SortMenu({
+  value,
+  onChange,
+}: {
+  value: Sort
+  onChange: (next: Sort) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const current = SORT_OPTIONS.find((option) => option.key === value) ??
+    SORT_OPTIONS[0]
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointer = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("mousedown", handlePointer)
+    document.addEventListener("keydown", handleKey)
+    return () => {
+      document.removeEventListener("mousedown", handlePointer)
+      document.removeEventListener("keydown", handleKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Sort by ${current.label}`}
+        onClick={() => setOpen((prev) => !prev)}
+        className="group border-border bg-card text-foreground hover:border-foreground/20 focus-visible:border-ring focus-visible:ring-ring/40 inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium shadow-xs transition-colors outline-none focus-visible:ring-3"
+      >
+        <span className="truncate">{current.label}</span>
+        <svg
+          viewBox="0 0 24 24"
+          className={`text-muted-foreground size-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open ? (
+        <div
+          role="listbox"
+          aria-label="Sort projects"
+          className="border-border bg-popover text-popover-foreground absolute right-0 z-30 mt-1.5 w-56 origin-top-right overflow-hidden rounded-xl border p-1 shadow-lg ring-1 ring-black/5 dark:ring-white/5"
+        >
+          {SORT_OPTIONS.map((option) => {
+            const active = option.key === value
+            return (
+              <button
+                key={option.key}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(option.key)
+                  setOpen(false)
+                }}
+                className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors ${
+                  active
+                    ? "bg-muted text-foreground"
+                    : "text-foreground/90 hover:bg-muted/70"
+                }`}
+              >
+                <span
+                  className={`mt-[3px] grid size-4 shrink-0 place-items-center rounded-full border ${
+                    active
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-transparent text-transparent"
+                  }`}
+                  aria-hidden
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="size-2.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="m5 12 5 5L20 7" />
+                  </svg>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] font-medium">
+                    {option.label}
+                  </span>
+                  <span className="text-muted-foreground block text-[11px]">
+                    {option.hint}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function ProjectIndexPage() {
   const router = useRouter()
   const { data: session, isPending } = authClient.useSession()
@@ -492,18 +615,12 @@ export default function ProjectIndexPage() {
                 aria-label="Search projects"
               />
             </div>
-            <label className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
-              <span className="tracking-[0.14em] uppercase">Sort</span>
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as Sort)}
-                className="border-input text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-8 rounded-lg border bg-transparent px-2 text-xs transition-colors outline-none focus-visible:ring-3"
-              >
-                <option value="updated">Last updated</option>
-                <option value="created">Recently created</option>
-                <option value="name">Name</option>
-              </select>
-            </label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground text-[11px] tracking-[0.14em] uppercase">
+                Sort
+              </span>
+              <SortMenu value={sort} onChange={setSort} />
+            </div>
           </div>
         </section>
 

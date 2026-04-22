@@ -149,18 +149,34 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-dvh bg-background">
+    <div className="relative min-h-dvh overflow-hidden bg-background">
+      {/* Ambient backdrop — subtle in light, richer in dark */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-0"
+      >
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_82%_12%,rgba(245,158,11,0.06),transparent_55%),radial-gradient(circle_at_12%_80%,rgba(14,165,233,0.05),transparent_55%)] dark:hidden" />
+        <div className="absolute inset-0 hidden bg-[radial-gradient(circle_at_82%_12%,rgba(245,158,11,0.18),transparent_55%),radial-gradient(circle_at_12%_80%,rgba(14,165,233,0.15),transparent_55%),radial-gradient(circle_at_50%_50%,rgba(16,185,129,0.08),transparent_65%)] dark:block" />
+        <div className="absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,black_30%,transparent_85%)]">
+          <div className="h-full w-full text-foreground opacity-[0.05] [background-image:radial-gradient(circle,_currentColor_1px,_transparent_1.5px)] [background-size:28px_28px] dark:opacity-[0.1]" />
+        </div>
+      </div>
+
       <div className="sticky top-0 z-20">
         <SiteHeader />
       </div>
 
-      <main className="mx-auto w-full max-w-[1200px] px-4 pb-16 sm:px-6">
+      <main className="relative z-10 mx-auto w-full max-w-[1200px] px-4 pb-16 sm:px-6">
         {/* ─────────────── Hero ─────────────── */}
         <section className="relative mt-4 overflow-hidden rounded-3xl border border-border bg-card">
           {/* Animated gradient banner */}
           <div className="relative h-48 w-full overflow-hidden sm:h-56">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_20%,rgba(245,158,11,0.35),transparent_55%),radial-gradient(circle_at_78%_30%,rgba(14,165,233,0.38),transparent_55%),radial-gradient(circle_at_50%_90%,rgba(16,185,129,0.3),transparent_60%)]" />
-            <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent,rgba(255,255,255,0.6))]" />
+            {/* Light-mode glow — warmer */}
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_20%,rgba(245,158,11,0.35),transparent_55%),radial-gradient(circle_at_78%_30%,rgba(14,165,233,0.38),transparent_55%),radial-gradient(circle_at_50%_90%,rgba(16,185,129,0.3),transparent_60%)] dark:hidden" />
+            {/* Dark-mode glow — richer, saturated */}
+            <div className="absolute inset-0 hidden bg-[radial-gradient(circle_at_18%_20%,rgba(245,158,11,0.45),transparent_55%),radial-gradient(circle_at_78%_30%,rgba(14,165,233,0.5),transparent_55%),radial-gradient(circle_at_50%_90%,rgba(16,185,129,0.4),transparent_60%)] dark:block" />
+            {/* Bottom fade into the card — white in light, near-black card in dark */}
+            <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent,rgba(255,255,255,0.6))] dark:bg-[linear-gradient(to_bottom,transparent_40%,var(--color-card))]" />
             <svg
               aria-hidden
               className="absolute inset-0 h-full w-full text-foreground/[0.04]"
@@ -506,48 +522,6 @@ export default function ProfilePage() {
 
               <div className="mt-4 space-y-2">
                 <ThemePreference />
-                <NotificationsPreference
-                  storageKey="codapac.pref.squadNotifications"
-                  defaultOn
-                  icon={
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="size-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                    >
-                      <path d="M15 17h5l-1.4-1.4A7 7 0 0 0 19 10V9a7 7 0 1 0-14 0v1a7 7 0 0 0 .4 5.6L4 17h5" />
-                      <path d="M9 17a3 3 0 0 0 6 0" />
-                    </svg>
-                  }
-                  title="Squad notifications"
-                  hintOn="Ping me when FIXER ships."
-                  hintOff="Muted — no agent pings."
-                />
-                <NotificationsPreference
-                  storageKey="codapac.pref.weeklyDigest"
-                  icon={
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="size-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                    >
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </svg>
-                  }
-                  title="Weekly digest"
-                  hintOn="Monday recap in your inbox."
-                  hintOff="No email recap."
-                />
               </div>
             </Card>
 
@@ -700,64 +674,6 @@ function ProjectRow({ project }: { project: ProfileProject }) {
   )
 }
 
-function PrefSwitch({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (next: boolean) => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-border transition-colors ${
-        checked ? "bg-foreground" : "bg-muted"
-      }`}
-    >
-      <span
-        className={`pointer-events-none absolute top-1/2 size-3.5 -translate-y-1/2 rounded-full bg-background shadow-sm ring-1 ring-border transition-transform ${
-          checked ? "translate-x-[18px]" : "translate-x-[2px]"
-        }`}
-      />
-    </button>
-  )
-}
-
-function usePersistedBoolean(storageKey: string, defaultValue = false) {
-  const [value, setValue] = useState<boolean>(defaultValue)
-  const [hydrated, setHydrated] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (raw === "true" || raw === "false") {
-        setValue(raw === "true")
-      }
-    } catch {
-      /* ignore */
-    }
-    setHydrated(true)
-  }, [storageKey])
-
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return
-    try {
-      window.localStorage.setItem(storageKey, String(value))
-    } catch {
-      /* ignore */
-    }
-  }, [storageKey, value, hydrated])
-
-  return [value, setValue, hydrated] as const
-}
-
 function ThemePreference() {
   const { theme, setTheme, resolvedTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
@@ -850,35 +766,3 @@ function ThemePreference() {
   )
 }
 
-function NotificationsPreference({
-  storageKey,
-  defaultOn = false,
-  icon,
-  title,
-  hintOn,
-  hintOff,
-}: {
-  storageKey: string
-  defaultOn?: boolean
-  icon: React.ReactNode
-  title: string
-  hintOn: string
-  hintOff: string
-}) {
-  const [checked, setChecked] = usePersistedBoolean(storageKey, defaultOn)
-
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-background/50 px-3 py-2.5">
-      <span className="grid size-8 place-items-center rounded-lg border border-border bg-card text-muted-foreground">
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-semibold tracking-tight">{title}</div>
-        <p className="truncate text-[11.5px] text-muted-foreground">
-          {checked ? hintOn : hintOff}
-        </p>
-      </div>
-      <PrefSwitch checked={checked} onChange={setChecked} label={title} />
-    </div>
-  )
-}

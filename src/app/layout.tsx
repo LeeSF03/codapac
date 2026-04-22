@@ -8,6 +8,7 @@ import { ConvexClientProvider } from "@/provider/ConvexClientProvider"
 import { ThemeProvider } from "@/provider/ThemeProvider"
 
 import "./globals.css"
+import Script from "next/script"
 
 const fontSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -46,6 +47,14 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable} h-full antialiased`}
     >
+      <head>{process.env.NODE_ENV === "development" && (
+          <Script
+            src="//unpkg.com/react-grab/dist/index.global.js"
+            crossOrigin="anonymous"
+            strategy="beforeInteractive"
+          />
+        )}
+      </head>
       <body className="flex min-h-full flex-col">
         <ThemeProvider
           attribute="class"
