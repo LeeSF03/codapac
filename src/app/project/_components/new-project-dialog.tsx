@@ -12,7 +12,6 @@ import {
   type NewProjectInput,
   type Project,
   type ProjectColor,
-  type ProjectVisibility,
   slugify,
   useCreateProject,
 } from "@/lib/mock-projects"
@@ -43,7 +42,6 @@ export function NewProjectDialog({
   const [description, setDescription] = useState("")
   const [emoji, setEmoji] = useState<string>(PROJECT_EMOJIS[0])
   const [color, setColor] = useState<ProjectColor>("sky")
-  const [visibility, setVisibility] = useState<ProjectVisibility>("private")
   const [repoUrl, setRepoUrl] = useState("")
   const [errors, setErrors] = useState<FieldErrors>({})
   const [submitting, setSubmitting] = useState(false)
@@ -58,7 +56,6 @@ export function NewProjectDialog({
     setColor(
       PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)].key,
     )
-    setVisibility("private")
     setRepoUrl("")
     setErrors({})
     setSubmitting(false)
@@ -99,7 +96,7 @@ export function NewProjectDialog({
       description: description.trim(),
       emoji,
       color,
-      visibility,
+      visibility: "private",
       repoUrl: repoUrl.trim() || undefined,
     }
     try {
@@ -264,39 +261,6 @@ export function NewProjectDialog({
                 >
                   <span className={`h-2.5 w-2.5 rounded-full ${candidate.dot}`} />
                   {candidate.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-1.5">
-            <Label className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Visibility
-            </Label>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  {
-                    key: "private",
-                    title: "Private",
-                    hint: "Only invited teammates.",
-                  },
-                  {
-                    key: "public",
-                    title: "Public",
-                    hint: "Anyone with the link.",
-                  },
-                ] as { key: ProjectVisibility; title: string; hint: string }[]
-              ).map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setVisibility(option.key)}
-                  data-active={visibility === option.key}
-                  className="flex flex-col items-start gap-0.5 rounded-xl border border-border bg-background px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-foreground/30 data-[active=true]:-translate-y-px data-[active=true]:border-foreground data-[active=true]:shadow-sm"
-                >
-                  <span className="text-[13px] font-semibold">{option.title}</span>
-                  <span className="text-[11px] text-muted-foreground">{option.hint}</span>
                 </button>
               ))}
             </div>

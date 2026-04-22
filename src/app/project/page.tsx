@@ -26,7 +26,7 @@ import {
 import { api } from "~/convex/_generated/api"
 import type { Id } from "~/convex/_generated/dataModel"
 
-type Filter = "all" | "starred" | ProjectVisibility | "archived"
+type Filter = "all" | "starred" | "archived"
 type Sort = "updated" | "created" | "name"
 type PlanningStatus =
   | "idle"
@@ -70,8 +70,6 @@ const SORT_OPTIONS: { key: Sort; label: string; hint: string }[] = [
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "starred", label: "Starred" },
-  { key: "private", label: "Private" },
-  { key: "public", label: "Public" },
   { key: "archived", label: "Archived" },
 ]
 
@@ -218,41 +216,6 @@ function ProjectCard({
         >
           <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
           {status.title}
-        </Badge>
-        <Badge
-          variant="outline"
-          className="gap-1.5 rounded-full px-2 py-0 text-[10px] font-medium capitalize"
-        >
-          {project.visibility === "private" ? (
-            <svg
-              viewBox="0 0 24 24"
-              className="size-3"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <rect x="3" y="11" width="18" height="11" rx="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-          ) : (
-            <svg
-              viewBox="0 0 24 24"
-              className="size-3"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
-            </svg>
-          )}
-          {project.visibility}
         </Badge>
         <span
           className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${accent.chip}`}
@@ -431,9 +394,6 @@ export default function ProjectIndexPage() {
     if (filter === "starred") list = list.filter((p) => p.starred)
     else if (filter === "archived")
       list = list.filter((p) => p.status === "archived")
-    else if (filter === "private" || filter === "public") {
-      list = list.filter((p) => p.visibility === filter)
-    }
     if (filter !== "archived") {
       list = list.filter((p) => p.status !== "archived")
     }
@@ -458,8 +418,6 @@ export default function ProjectIndexPage() {
     return {
       total: list.length,
       starred: list.filter((p) => p.starred).length,
-      private: list.filter((p) => p.visibility === "private").length,
-      public: list.filter((p) => p.visibility === "public").length,
       archived: list.filter((p) => p.status === "archived").length,
     }
   }, [projects])
