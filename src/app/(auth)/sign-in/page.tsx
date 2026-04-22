@@ -4,7 +4,7 @@ import { redirect } from "next/navigation"
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { SignInCard } from "./_components/sign-in-card"
-import { SignInPreview } from "./_components/sign-in-preview"
+import { BotConstellation, ContourBackdrop } from "./_components/sign-in-stage"
 
 export default async function SignInPage() {
   const user = await getAuthUser()
@@ -18,12 +18,40 @@ export default async function SignInPage() {
   }
 
   return (
-    <main className="mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1 items-center gap-8 overflow-hidden px-6 py-6 lg:grid-cols-[1.2fr_1fr] lg:gap-12">
-      <SignInPreview />
+    <>
+      <ContourBackdrop />
 
-      <section className="flex h-full items-center justify-center overflow-hidden">
-        <SignInCard />
-      </section>
-    </main>
+      <main className="relative z-10 mx-auto grid w-full max-w-[1500px] flex-1 grid-cols-1 items-center gap-8 overflow-hidden px-6 py-6 lg:grid-cols-[1.15fr_1fr] lg:gap-12">
+        {/* Left: headline + bot constellation */}
+        <section className="hidden h-full min-h-0 flex-col justify-center gap-6 lg:flex">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+              Meet the squad
+            </p>
+            <h1 className="mt-2 max-w-xl text-[40px] font-semibold leading-[1.05] tracking-tight">
+              Your autonomous engineering team,{" "}
+              <span className="text-muted-foreground">
+                waiting on a sign in.
+              </span>
+            </h1>
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+              <span className="font-semibold text-amber-700">BOSS</span> scopes
+              the issue,{" "}
+              <span className="font-semibold text-sky-700">FIXER</span> welds
+              the patch,{" "}
+              <span className="font-semibold text-emerald-700">TESTEES</span>{" "}
+              proves it green — from one board, one chat.
+            </p>
+          </div>
+
+          <BotConstellation />
+        </section>
+
+        {/* Right: sign-in card (real auth) */}
+        <section className="flex h-full items-center justify-center overflow-hidden">
+          <SignInCard />
+        </section>
+      </main>
+    </>
   )
 }

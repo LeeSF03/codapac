@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-import { NewProjectDialog } from "@/app/mock/projects/_components/new-project-dialog"
+import { NewProjectDialog } from "@/app/project/_components/new-project-dialog"
 import { authClient } from "@/lib/auth-client"
 import {
   type ProjectColor,
@@ -428,8 +428,8 @@ export default function ProjectIndexPage() {
               Projects
             </h1>
             <p className="text-muted-foreground mt-1 max-w-xl text-sm">
-              Every project gets its own autonomous board. Create one and keep
-              the mock routes separate from your real workspace data.
+              Every project gets its own autonomous board. Spin one up and the
+              squad will start picking up issues the moment they land.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -519,7 +519,7 @@ export default function ProjectIndexPage() {
               <p className="text-muted-foreground mt-1 max-w-xs text-xs">
                 {query
                   ? "Try a different search, or clear the filters to see everything."
-                  : "Create your first live project and keep the mock board isolated under /mock."}
+                  : "Create your first project and drop the first issues on the board."}
               </p>
               <div className="mt-4 flex gap-2">
                 {query ? (

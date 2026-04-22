@@ -5,6 +5,7 @@ import { NuqsAdapter } from "nuqs/adapters/next/app"
 
 import { getToken } from "@/lib/auth-server"
 import { ConvexClientProvider } from "@/provider/ConvexClientProvider"
+import { ThemeProvider } from "@/provider/ThemeProvider"
 
 import "./globals.css"
 
@@ -42,14 +43,22 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <NuqsAdapter>
-          <ConvexClientProvider initialToken={token}>
-            {children}
-          </ConvexClientProvider>
-        </NuqsAdapter>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <NuqsAdapter>
+            <ConvexClientProvider initialToken={token}>
+              {children}
+            </ConvexClientProvider>
+          </NuqsAdapter>
+        </ThemeProvider>
       </body>
     </html>
   )

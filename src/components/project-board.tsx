@@ -504,7 +504,7 @@ export function ProjectBoard({
                     <CardItem
                       key={c.id}
                       card={c}
-                      href={issueHrefForCard ? issueHrefForCard(c) : `/mock/issues/${c.issueNumber}`}
+                      href={issueHrefForCard ? issueHrefForCard(c) : `/issues/${c.issueNumber}`}
                       interactive={isInteractive}
                       onAdvance={
                         onAdvanceCard
@@ -723,7 +723,7 @@ export function ProjectBoard({
                   </div>
                   {forwarded ? (
                     <Link
-                      href={"/mock/chat" as Route}
+                      href={"/chat" as Route}
                       className="inline-flex items-center gap-1 font-medium text-emerald-600 transition-colors hover:text-emerald-700"
                     >
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
