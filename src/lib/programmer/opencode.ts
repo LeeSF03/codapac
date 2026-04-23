@@ -102,7 +102,7 @@ function buildOpencodeConfig(glmToken: string, glmModel: string) {
           name: "GLM",
           options: {
             apiKey: glmToken,
-            baseURL: "https://api.moonshot.ai/v1",
+            baseURL: process.env.GLM_BASE_URL?.trim() || "https://api.ilmu.ai/v1",
           },
           models: {
             [glmModel]: {

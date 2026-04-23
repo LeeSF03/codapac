@@ -2,7 +2,8 @@
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 
-const DEFAULT_GLM_MODEL_ID = "kimi-k2.5"
+const DEFAULT_GLM_MODEL_ID = "ilmu-glm-5.1"
+const DEFAULT_GLM_BASE_URL = "https://api.ilmu.ai/v1"
 
 type GlmErrorPayload = {
   error?: {
@@ -29,7 +30,7 @@ export function getGlmModel() {
 }
 
 export function getGlmBaseUrl() {
-  return process.env.GLM_BASE_URL?.trim() || "https://api.moonshot.ai/v1"
+  return process.env.GLM_BASE_URL?.trim() || DEFAULT_GLM_BASE_URL
 }
 
 export function getGlmLanguageModel() {
