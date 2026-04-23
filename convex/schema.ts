@@ -85,6 +85,7 @@ const schema = defineSchema({
     status: projectStatus,
     repoUrl: v.union(v.string(), v.null()),
     vercelProjectId: v.optional(v.union(v.string(), v.null())),
+    latestPreviewDeploymentUrl: v.optional(v.union(v.string(), v.null())),
     starred: v.boolean(),
     nextCardSeq: v.number(),
     nextIssueSeq: v.number(),

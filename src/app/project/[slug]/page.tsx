@@ -258,7 +258,11 @@ export default function ProjectDetailPage() {
         ]
       : chatMessages
 
-  const launchQaForCard = async (cardKey: string, recoveryDepth = 0) => {
+  const launchQaForCards = async (
+    cardKeys: string | string[],
+    recoveryDepth = 0,
+  ) => {
+    const keys = Array.isArray(cardKeys) ? cardKeys : [cardKeys]
     const response = await fetch("/api/qa/launch", {
       method: "POST",
       headers: {
@@ -266,7 +270,7 @@ export default function ProjectDetailPage() {
       },
       body: JSON.stringify({
         projectId: project.id,
-        cardKey,
+        cardKeys: keys,
         recoveryDepth,
       }),
     })
@@ -282,6 +286,7 @@ export default function ProjectDetailPage() {
       | {
           status?: string
           cardKey?: string
+          cardKeys?: string[]
         }
       | null
 
@@ -289,12 +294,18 @@ export default function ProjectDetailPage() {
       payload?.status === "reassigned_to_programmer" &&
       recoveryDepth < 2
     ) {
-      await launchProgrammerThenQa(payload.cardKey ?? cardKey, recoveryDepth + 1)
+      await launchProgrammerThenQa(
+        payload.cardKeys?.length ? payload.cardKeys : payload.cardKey ?? keys,
+        recoveryDepth + 1,
+      )
       return
     }
 
     if (payload?.status === "qa_retry_needed" && recoveryDepth < 1) {
-      await launchQaForCard(cardKey, recoveryDepth + 1)
+      await launchQaForCards(
+        payload.cardKeys?.length ? payload.cardKeys : keys,
+        recoveryDepth + 1,
+      )
     }
   }
 
@@ -321,9 +332,7 @@ export default function ProjectDetailPage() {
       throw new Error(payload?.error || "Failed to start Programmer.")
     }
 
-    for (const key of keys) {
-      await launchQaForCard(key, recoveryDepth)
-    }
+    await launchQaForCards(keys, recoveryDepth)
   }
 
   return (
@@ -357,7 +366,7 @@ export default function ProjectDetailPage() {
             }
 
             if (card?.tone === "done") {
-              await launchQaForCard(cardKey)
+              await launchQaForCards(cardKey)
               return
             }
 
@@ -455,9 +464,7 @@ export default function ProjectDetailPage() {
 
             if (qaCardKeys.length > 0) {
               void (async () => {
-                for (const qaCardKey of qaCardKeys) {
-                  await launchQaForCard(qaCardKey)
-                }
+                await launchQaForCards(qaCardKeys)
               })().catch((error: unknown) => {
                 setErrorDialog(toFriendlyError(error, "Testing unavailable"))
               })

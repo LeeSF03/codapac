@@ -2,7 +2,7 @@
 
 import { generateText } from "ai"
 
-import { getKimiLanguageModel, getKimiTemperature } from "@/lib/boss/kimi"
+import { getGlmLanguageModel, getGlmTemperature } from "@/lib/boss/glm"
 
 export type ProjectChatAgentAuthor = "BOSS" | "PROGRAMMER" | "QA"
 
@@ -161,15 +161,15 @@ export function buildBossChatMessages(
 
 export async function generateBossChatReply(context: ProjectChatContext) {
   const result = await generateText({
-    model: getKimiLanguageModel(),
-    temperature: getKimiTemperature(),
+    model: getGlmLanguageModel(),
+    temperature: getGlmTemperature(),
     maxOutputTokens: 1_000,
     messages: buildBossChatMessages(context),
   })
 
   const reply = result.text.trim()
   if (!reply) {
-    throw new Error("Kimi did not return a project chat reply.")
+    throw new Error("GLM did not return a project chat reply.")
   }
 
   return reply

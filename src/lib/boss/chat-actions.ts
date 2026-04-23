@@ -3,7 +3,7 @@
 import { generateObject, generateText } from "ai"
 import { z } from "zod"
 
-import { getKimiLanguageModel, getKimiTemperature } from "@/lib/boss/kimi"
+import { getGlmLanguageModel, getGlmTemperature } from "@/lib/boss/glm"
 
 type ChatTodoIntent = {
   shouldCreate: boolean
@@ -588,8 +588,8 @@ export async function generateAgentRoutingDecision(
 
   try {
     const result = await generateObject({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       schema: agentRoutingDecisionSchema,
       prompt: buildAgentRoutingPrompt(userMessage, context, createdTodos),
     })
@@ -697,8 +697,8 @@ export async function generateProgrammerLaunchGroups(
 
   try {
     const result = await generateObject({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       schema: programmerLaunchGroupsSchema,
       prompt,
     })
@@ -942,8 +942,8 @@ export async function generateChatCardDraft(
 
   try {
     const result = await generateObject({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       schema: generatedCardSchema,
       prompt,
     })
@@ -951,8 +951,8 @@ export async function generateChatCardDraft(
     return result.object
   } catch {
     const result = await generateText({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       maxOutputTokens: 1_200,
       messages: [
         {
@@ -985,8 +985,8 @@ export async function generateChatCardDrafts(
 
   try {
     const result = await generateObject({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       schema: generatedCardsSchema,
       prompt,
     })
@@ -994,8 +994,8 @@ export async function generateChatCardDrafts(
     return uniqueNewDrafts(result.object.todos, context)
   } catch {
     const result = await generateText({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       maxOutputTokens: 2_000,
       messages: [
         {

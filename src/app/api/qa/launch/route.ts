@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { ensureVercelProject } from "@/lib/boss/vercel"
+import {
+  deleteVercelDeploymentByUrl,
+  ensureVercelProject,
+} from "@/lib/boss/vercel"
 import { embedText } from "@/lib/boss/embeddings"
 import { fetchAuthMutation, getAuthUser } from "@/lib/auth-server"
 import { runQaIntegration } from "@/lib/qa/integration"
@@ -13,8 +16,11 @@ export const runtime = "nodejs"
 
 const launchBodySchema = z.object({
   projectId: z.string().min(1),
-  cardKey: z.string().trim().min(1),
+  cardKey: z.string().trim().min(1).optional(),
+  cardKeys: z.array(z.string().trim().min(1)).min(1).max(5).optional(),
   recoveryDepth: z.number().int().min(0).max(3).optional(),
+}).refine((value) => Boolean(value.cardKey || value.cardKeys?.length), {
+  message: "cardKey or cardKeys is required.",
 })
 
 function errorMessage(error: unknown) {
@@ -41,6 +47,22 @@ function shouldHandBackToProgrammer(message: string) {
   )
 }
 
+function deploymentUrlsMatch(left: string, right: string) {
+  try {
+    const normalize = (value: string) => {
+      const trimmed = value.trim()
+      const withProtocol = /^https?:\/\//i.test(trimmed)
+        ? trimmed
+        : `https://${trimmed}`
+      return new URL(withProtocol).origin
+    }
+
+    return normalize(left) === normalize(right)
+  } catch {
+    return left.trim() === right.trim()
+  }
+}
+
 export async function POST(request: Request) {
   if (!(await getAuthUser())) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
@@ -52,23 +74,41 @@ export async function POST(request: Request) {
   }
 
   const projectId = parsedBody.data.projectId as Id<"projects">
-  const cardKey = parsedBody.data.cardKey
+  const cardKeys = Array.from(
+    new Set([
+      ...(parsedBody.data.cardKeys ?? []),
+      ...(parsedBody.data.cardKey ? [parsedBody.data.cardKey] : []),
+    ]),
+  )
   const recoveryDepth = parsedBody.data.recoveryDepth ?? 0
   const externalRunId = `qa-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
 
-  const claim = await fetchAuthMutation(api.projects.claimQaExecution, {
-    projectId,
-    cardKey,
-    externalRunId,
-  })
+  const claims = (
+    await Promise.all(
+      cardKeys.map((cardKey) =>
+        fetchAuthMutation(api.projects.claimQaExecution, {
+          projectId,
+          cardKey,
+          externalRunId,
+        }),
+      ),
+    )
+  ).filter((claim) => claim !== null)
 
-  if (!claim) {
+  if (claims.length === 0) {
     return NextResponse.json({ status: "noop" }, { status: 202 })
   }
 
+  const claim = claims[0]
+  const previousDeploymentUrl = claim.project.latestPreviewDeploymentUrl
+  const taskLabel =
+    claims.length === 1
+      ? `${claim.card.cardKey}: ${claim.card.title}`
+      : `${claims.length} grouped tasks (${claims.map((item) => item.card.cardKey).join(", ")})`
+
   await saveQaMessage(
     projectId,
-    `I'm checking ${claim.card.cardKey}: ${claim.card.title}. I'll write integration tests and report back when the review is done.`,
+    `I'm checking ${taskLabel}. I'll write integration tests and report back when the review is done.`,
   )
 
   let stage = "preparing QA"
@@ -91,35 +131,57 @@ export async function POST(request: Request) {
         repoUrl: claim.project.repoUrl,
         vercelProjectId: claim.project.vercelProjectId,
       },
-      card: claim.card,
+      cards: claims.map((item) => item.card),
       branchName: claim.branchName,
       onStarted: async ({ sandboxId, commandId }) => {
-        await fetchAuthMutation(api.projects.markQaExecutionStarted, {
-          projectId,
-          jobId: claim.jobId,
-          sandboxId,
-          commandId,
-          notes: "QA is writing and running integration tests.",
-        })
+        for (const item of claims) {
+          await fetchAuthMutation(api.projects.markQaExecutionStarted, {
+            projectId,
+            jobId: item.jobId,
+            sandboxId,
+            commandId,
+            notes:
+              claims.length === 1
+                ? "QA is writing and running integration tests."
+                : "QA is writing and running integration tests for this grouped change.",
+          })
+        }
       },
     })
 
     stage = "saving QA results"
-    await fetchAuthMutation(api.projects.completeQaExecution, {
-      projectId,
-      jobId: claim.jobId,
-      previewDeploymentUrl: result.previewDeploymentUrl,
-      summary: result.summary.slice(0, 1_500),
-    })
+    for (const item of claims) {
+      await fetchAuthMutation(api.projects.completeQaExecution, {
+        projectId,
+        jobId: item.jobId,
+        previewDeploymentUrl: result.previewDeploymentUrl,
+        summary: result.summary.slice(0, 1_500),
+      })
+    }
+
+    let previousDeploymentDeleted = false
+    if (
+      previousDeploymentUrl &&
+      !deploymentUrlsMatch(previousDeploymentUrl, result.previewDeploymentUrl)
+    ) {
+      try {
+        await deleteVercelDeploymentByUrl(previousDeploymentUrl)
+        previousDeploymentDeleted = true
+      } catch (cleanupError) {
+        console.error("Unable to delete previous Vercel deployment", cleanupError)
+      }
+    }
 
     await saveQaMessage(
       projectId,
-      `I finished checking ${claim.card.cardKey}: ${claim.card.title}. The tests passed and the preview is ready.`,
+      `I finished checking ${taskLabel}. The tests passed and the preview is ready.`,
     )
 
     return NextResponse.json({
       status: "completed",
       previewDeploymentUrl: result.previewDeploymentUrl,
+      previousDeploymentDeleted,
+      cardKeys: claims.map((item) => item.card.cardKey),
     })
   } catch (error) {
     const message = `QA launch failed while ${stage}: ${errorMessage(error)}`
@@ -127,23 +189,28 @@ export async function POST(request: Request) {
     const canAutoRecover = recoveryDepth < 2
 
     try {
-      const failure = await fetchAuthMutation(api.projects.failQaExecution, {
-        projectId,
-        jobId: claim.jobId,
-        error: message.slice(0, 1_500),
-        reassignToProgrammer: handBackToProgrammer && canAutoRecover,
-      })
+      const failures = []
+      for (const item of claims) {
+        failures.push(
+          await fetchAuthMutation(api.projects.failQaExecution, {
+            projectId,
+            jobId: item.jobId,
+            error: message.slice(0, 1_500),
+            reassignToProgrammer: handBackToProgrammer && canAutoRecover,
+          }),
+        )
+      }
 
-      if (failure.reassignedToProgrammer) {
+      if (failures.some((failure) => failure.reassignedToProgrammer)) {
         await saveQaMessage(
           projectId,
-          `I found a problem while checking ${claim.card.cardKey}: ${claim.card.title}. I'm sending it back to FIXER now, and I'll check it again after the fix is ready.`,
+          `I found a problem while checking ${taskLabel}. I'm sending it back to FIXER now, and I'll check it again after the fix is ready.`,
         )
 
         return NextResponse.json(
           {
             status: "reassigned_to_programmer",
-            cardKey: failure.cardKey,
+            cardKeys: failures.map((failure) => failure.cardKey),
           },
           { status: 202 },
         )
@@ -152,8 +219,8 @@ export async function POST(request: Request) {
       await saveQaMessage(
         projectId,
         canAutoRecover
-          ? `I hit a problem while checking ${claim.card.cardKey}: ${claim.card.title}. I'll keep it in review so QA can retry instead of stopping the workflow.`
-          : `I couldn't approve ${claim.card.cardKey}: ${claim.card.title}. It is still waiting for review until the issue is fixed and checked again.`,
+          ? `I hit a problem while checking ${taskLabel}. I'll keep it in review so QA can retry instead of stopping the workflow.`
+          : `I couldn't approve ${taskLabel}. It is still waiting for review until the issue is fixed and checked again.`,
       )
     } catch (failureUpdateError) {
       console.error("Unable to record QA failure", failureUpdateError)
@@ -163,6 +230,7 @@ export async function POST(request: Request) {
       {
         status: canAutoRecover ? "qa_retry_needed" : "qa_failed",
         error: message,
+        cardKeys: claims.map((item) => item.card.cardKey),
       },
       { status: 202 },
     )

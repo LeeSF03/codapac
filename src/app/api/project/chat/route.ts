@@ -12,7 +12,7 @@ import {
   type ProjectChatAgentAuthor,
 } from "@/lib/boss/chat"
 import { embedText } from "@/lib/boss/embeddings"
-import { getKimiLanguageModel, getKimiTemperature } from "@/lib/boss/kimi"
+import { getGlmLanguageModel, getGlmTemperature } from "@/lib/boss/glm"
 import {
   fetchAuthAction,
   fetchAuthMutation,
@@ -29,6 +29,24 @@ const requestSchema = z.object({
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Project chat failed."
+}
+
+function formatCreatedTodosReply(
+  createdTodos: Array<{ id: string; title: string; agent: string }>,
+) {
+  if (createdTodos.length === 0) {
+    return ""
+  }
+
+  const intro =
+    createdTodos.length === 1
+      ? "I created 1 task and added it to the To Do column:"
+      : `I created ${createdTodos.length} tasks and added them to the To Do column:`
+  const list = createdTodos
+    .map((todo) => `- ${todo.id}: ${todo.title}`)
+    .join("\n")
+
+  return `${intro}\n\n${list}`
 }
 
 export async function POST(request: Request) {
@@ -107,9 +125,14 @@ export async function POST(request: Request) {
         ? []
         : routingDecision.qaLaunchCards
     const qaLaunchCardKeys = qaLaunchCards.map((card) => card.cardKey)
+    const createdTodosReply = formatCreatedTodosReply(createdTodos)
 
     const replyAuthor: ProjectChatAgentAuthor =
-      qaLaunchCardKeys.length > 0 ? "QA" : routingDecision.replyAuthor
+      createdTodos.length > 0
+        ? "BOSS"
+        : qaLaunchCardKeys.length > 0
+          ? "QA"
+          : routingDecision.replyAuthor
 
     const messages = buildBossChatMessages(
       {
@@ -127,9 +150,38 @@ export async function POST(request: Request) {
       replyAuthor,
     )
 
+    if (createdTodosReply) {
+      await fetchAuthMutation(api.projectChat.saveMessage, {
+        projectId,
+        role: "assistant",
+        author: "BOSS",
+        content: createdTodosReply,
+        embedding: embedText(createdTodosReply),
+      })
+
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(createdTodosReply))
+          controller.close()
+        },
+      })
+
+      return new Response(stream, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "x-codapac-chat-author": "BOSS",
+          "x-codapac-launch-card-groups": encodeURIComponent(
+            JSON.stringify(programmerLaunchGroups),
+          ),
+          "x-codapac-launch-card-keys": programmerLaunchCardKeys.join(","),
+          "x-codapac-qa-card-keys": qaLaunchCardKeys.join(","),
+        },
+      })
+    }
+
     const result = streamText({
-      model: getKimiLanguageModel(),
-      temperature: getKimiTemperature(),
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
       maxOutputTokens: 1_000,
       messages,
       onFinish: async ({ text }) => {

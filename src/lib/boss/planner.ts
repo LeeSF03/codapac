@@ -3,9 +3,9 @@
 import { generateText } from "ai"
 
 import {
-  getKimiLanguageModel,
-  getKimiTemperature,
-} from "@/lib/boss/kimi"
+  getGlmLanguageModel,
+  getGlmTemperature,
+} from "@/lib/boss/glm"
 import { bossPlanSchema, type BossPlan } from "@/lib/boss/schema"
 
 type PlanningProjectContext = {
@@ -74,8 +74,8 @@ export async function generateBossPlan(
   project: PlanningProjectContext,
 ): Promise<BossPlan> {
   const result = await generateText({
-    model: getKimiLanguageModel(),
-    temperature: getKimiTemperature(),
+    model: getGlmLanguageModel(),
+    temperature: getGlmTemperature(),
     maxOutputTokens: 4_000,
     messages: [
       {
@@ -91,12 +91,12 @@ export async function generateBossPlan(
 
   const content = result.text.trim()
   if (!content) {
-    throw new Error("Kimi did not return a JSON planning payload.")
+    throw new Error("GLM did not return a JSON planning payload.")
   }
 
   if (result.finishReason === "length") {
     throw new Error(
-      "Kimi returned a truncated planning payload. Increase max_tokens or shorten the brief.",
+      "GLM returned a truncated planning payload. Increase max_tokens or shorten the brief.",
     )
   }
 

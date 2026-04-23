@@ -42,7 +42,6 @@ export function NewProjectDialog({
   const [description, setDescription] = useState("")
   const [emoji, setEmoji] = useState<string>(PROJECT_EMOJIS[0])
   const [color, setColor] = useState<ProjectColor>("sky")
-  const [repoUrl, setRepoUrl] = useState("")
   const [errors, setErrors] = useState<FieldErrors>({})
   const [submitting, setSubmitting] = useState(false)
 
@@ -56,7 +55,6 @@ export function NewProjectDialog({
     setColor(
       PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)].key,
     )
-    setRepoUrl("")
     setErrors({})
     setSubmitting(false)
     const t = window.setTimeout(() => firstFieldRef.current?.focus(), 40)
@@ -97,7 +95,6 @@ export function NewProjectDialog({
       emoji,
       color,
       visibility: "private",
-      repoUrl: repoUrl.trim() || undefined,
     }
     try {
       const project = onCreateProject
@@ -264,21 +261,6 @@ export function NewProjectDialog({
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="mt-5 grid gap-1.5">
-            <Label htmlFor="project-repo" className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Repository URL <span className="text-muted-foreground/70">(optional)</span>
-            </Label>
-            <Input
-              id="project-repo"
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/your-org/your-repo"
-              inputMode="url"
-              type="url"
-              className="font-mono text-[13px]"
-            />
           </div>
 
           <div className="mt-6 flex items-center justify-end gap-2 border-t border-border pt-4">

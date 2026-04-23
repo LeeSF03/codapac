@@ -3,7 +3,7 @@
 import { Sandbox } from "@vercel/sandbox"
 
 import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
-import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
+import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
 const OPENCODE_CONFIG_PATH = "/tmp/codapac-opencode.json"
@@ -85,12 +85,12 @@ function publicBranchUrl(repoUrl: string, branchName: string) {
   return `${cleanRepoUrl}/tree/${encodeURIComponent(branchName)}`
 }
 
-function opencodeModelId(providerId: string, kimiModel: string) {
-  return `${providerId}/${kimiModel}`
+function opencodeModelId(providerId: string, glmModel: string) {
+  return `${providerId}/${glmModel}`
 }
 
-function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
-  const providerId = "moonshot"
+function buildOpencodeConfig(glmToken: string, glmModel: string) {
+  const providerId = "glm"
 
   return JSON.stringify(
     {
@@ -99,19 +99,19 @@ function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
       provider: {
         [providerId]: {
           npm: "@ai-sdk/openai-compatible",
-          name: "Moonshot AI",
+          name: "GLM",
           options: {
-            apiKey: kimiToken,
+            apiKey: glmToken,
             baseURL: "https://api.moonshot.ai/v1",
           },
           models: {
-            [kimiModel]: {
-              name: `Kimi ${kimiModel}`,
+            [glmModel]: {
+              name: `GLM ${glmModel}`,
             },
           },
         },
       },
-      model: opencodeModelId(providerId, kimiModel),
+      model: opencodeModelId(providerId, glmModel),
     },
     null,
     2,
@@ -193,8 +193,7 @@ async function safeCommandOutput(
 function redactSensitiveOutput(value: string) {
   const secrets = [
     process.env.GITHUB_TOKEN,
-    process.env.KIMI_TOKEN,
-    process.env.MOONSHOT_API_KEY,
+    process.env.GLM_TOKEN,
     process.env.VERCEL_TOKEN,
   ]
     .map((secret) => secret?.trim())
@@ -233,9 +232,9 @@ async function sandboxStep<T>(label: string, operation: () => Promise<T>) {
 
 export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
   const githubToken = getGitHubToken()
-  const kimiToken = getKimiToken()
-  const kimiModel = getKimiModel()
-  const modelId = opencodeModelId("moonshot", kimiModel)
+  const glmToken = getGlmToken()
+  const glmModel = getGlmModel()
+  const modelId = opencodeModelId("glm", glmModel)
   const cards = input.cards
   if (cards.length === 0) {
     throw new Error("Programmer needs at least one task to run.")
@@ -302,7 +301,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
       sandbox.writeFiles([
         {
           path: OPENCODE_CONFIG_PATH,
-          content: Buffer.from(buildOpencodeConfig(kimiToken, kimiModel)),
+          content: Buffer.from(buildOpencodeConfig(glmToken, glmModel)),
         },
       ]),
     )

@@ -122,6 +122,9 @@ function serializeProject(
   project: Doc<"projects">,
   latestPreviewDeploymentUrl?: string | null,
 ) {
+  const stablePreviewDeploymentUrl =
+    project.latestPreviewDeploymentUrl ?? latestPreviewDeploymentUrl ?? undefined
+
   return {
     id: project._id,
     name: project.name,
@@ -133,7 +136,7 @@ function serializeProject(
     status: project.status,
     repoUrl: project.repoUrl ?? undefined,
     vercelProjectId: project.vercelProjectId ?? undefined,
-    latestPreviewDeploymentUrl: latestPreviewDeploymentUrl ?? undefined,
+    latestPreviewDeploymentUrl: stablePreviewDeploymentUrl,
     createdAt: project._creationTime,
     updatedAt: project.updatedAt,
     starred: project.starred,
@@ -483,6 +486,7 @@ export const createProject = mutation({
       status: "active",
       repoUrl: args.repoUrl?.trim() || null,
       vercelProjectId: null,
+      latestPreviewDeploymentUrl: null,
       starred: false,
       nextCardSeq: 1,
       nextIssueSeq: 1,
@@ -1353,6 +1357,7 @@ export const claimQaExecution = mutation({
         visibility: project.visibility,
         repoUrl: programmerJob.repoUrl,
         vercelProjectId,
+        latestPreviewDeploymentUrl: project.latestPreviewDeploymentUrl ?? null,
       },
       card: {
         cardKey: card.cardKey,
@@ -1428,6 +1433,7 @@ export const completeQaExecution = mutation({
 
     await ctx.db.patch(project._id, {
       ...nextCounts,
+      latestPreviewDeploymentUrl: previewDeploymentUrl,
       updatedAt: now,
       lastActivityAt: now,
     })

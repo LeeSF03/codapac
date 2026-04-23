@@ -3,7 +3,7 @@
 import { Sandbox } from "@vercel/sandbox"
 
 import { getGitHubToken } from "@/lib/boss/github"
-import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
+import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
@@ -32,7 +32,7 @@ type QaCard = {
 type QaRunInput = {
   externalRunId: string
   project: QaProject
-  card: QaCard
+  cards: QaCard[]
   branchName: string
   onStarted?: (details: {
     sandboxId: string
@@ -68,17 +68,22 @@ function safeBranchSegment(value: string) {
     .slice(0, 80)
 }
 
-function buildQaBranchName(card: QaCard, externalRunId: string) {
+function buildQaBranchName(cards: QaCard[], externalRunId: string) {
+  const firstCard = cards[0]
   const suffix = safeBranchSegment(externalRunId).slice(-10) || Date.now().toString(36)
-  return `codapac/qa-${safeBranchSegment(card.cardKey)}-${suffix}`.slice(0, 120)
+  const scope =
+    cards.length === 1
+      ? safeBranchSegment(firstCard.cardKey)
+      : `${safeBranchSegment(firstCard.cardKey)}-${cards.length}-tasks`
+  return `codapac/qa-${scope}-${suffix}`.slice(0, 120)
 }
 
-function opencodeModelId(providerId: string, kimiModel: string) {
-  return `${providerId}/${kimiModel}`
+function opencodeModelId(providerId: string, glmModel: string) {
+  return `${providerId}/${glmModel}`
 }
 
-function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
-  const providerId = "moonshot"
+function buildOpencodeConfig(glmToken: string, glmModel: string) {
+  const providerId = "glm"
 
   return JSON.stringify(
     {
@@ -87,43 +92,32 @@ function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
       provider: {
         [providerId]: {
           npm: "@ai-sdk/openai-compatible",
-          name: "Moonshot AI",
+          name: "GLM",
           options: {
-            apiKey: kimiToken,
+            apiKey: glmToken,
             baseURL: "https://api.moonshot.ai/v1",
           },
           models: {
-            [kimiModel]: {
-              name: `Kimi ${kimiModel}`,
+            [glmModel]: {
+              name: `GLM ${glmModel}`,
             },
           },
         },
       },
-      model: opencodeModelId(providerId, kimiModel),
+      model: opencodeModelId(providerId, glmModel),
     },
     null,
     2,
   )
 }
 
-function buildQaPrompt(project: QaProject, card: QaCard) {
+function formatQaTask(card: QaCard) {
   const criteria =
     card.acceptanceCriteria.length > 0
-      ? card.acceptanceCriteria.map((item) => `- ${item}`).join("\n")
-      : "- The requested result is visible and ready to review."
+      ? card.acceptanceCriteria.map((item) => `  - ${item}`).join("\n")
+      : "  - The requested result is visible and ready to review."
 
   return [
-    "You are the QA agent for this repository.",
-    "Write integration tests for exactly one completed task.",
-    "Do not write browser, end-to-end, Playwright, visual, or video-recording tests yet.",
-    "Prefer the repository's existing test framework. If no integration test setup exists, add a minimal integration test setup and a package script named test:integration.",
-    "Keep tests deterministic and local. Do not require external services, secrets, paid APIs, or production credentials.",
-    "Do not merge branches. Do not deploy. Do not commit or push. The host application handles git and preview deployment after tests pass.",
-    "The programmer's work has already been merged into main. Test the current main branch.",
-    "",
-    `Project: ${project.name}`,
-    `Project goal: ${project.description || "(none provided)"}`,
-    "",
     `Task: ${card.cardKey} - ${card.title}`,
     `Priority: ${card.priority}`,
     `Labels: ${card.tags.length > 0 ? card.tags.join(", ") : "none"}`,
@@ -133,6 +127,28 @@ function buildQaPrompt(project: QaProject, card: QaCard) {
     "",
     "Acceptance checklist:",
     criteria,
+  ].join("\n")
+}
+
+function buildQaPrompt(project: QaProject, cards: QaCard[]) {
+  const taskList = cards.map(formatQaTask).join("\n\n---\n\n")
+
+  return [
+    "You are the QA agent for this repository.",
+    cards.length === 1
+      ? "Write integration tests for exactly one completed task."
+      : `Write integration tests for this grouped change covering ${cards.length} completed tasks.`,
+    "Do not write browser, end-to-end, Playwright, visual, or video-recording tests yet.",
+    "Prefer the repository's existing test framework. If no integration test setup exists, add a minimal integration test setup and a package script named test:integration.",
+    "Keep tests deterministic and local. Do not require external services, secrets, paid APIs, or production credentials.",
+    "Do not merge branches. Do not deploy. Do not commit or push. The host application handles git and preview deployment after tests pass.",
+    "The programmer's work has already been merged into main. Test the current main branch.",
+    "",
+    `Project: ${project.name}`,
+    `Project goal: ${project.description || "(none provided)"}`,
+    "",
+    "Completed work to verify:",
+    taskList,
     "",
     "When done, summarize the integration test files or scripts you added.",
   ].join("\n")
@@ -231,8 +247,7 @@ async function safeCommandOutput(
 function redactSensitiveOutput(value: string) {
   const secrets = [
     process.env.GITHUB_TOKEN,
-    process.env.KIMI_TOKEN,
-    process.env.MOONSHOT_API_KEY,
+    process.env.GLM_TOKEN,
     process.env.VERCEL_TOKEN,
   ]
     .map((secret) => secret?.trim())
@@ -285,16 +300,21 @@ function errorMessage(error: unknown) {
 
 function qaAuthoringArgs(
   modelId: string,
-  card: QaCard,
+  cards: QaCard[],
   project: QaProject,
   format: "json" | "text",
 ) {
+  const firstCard = cards[0]
+  const title =
+    cards.length === 1
+      ? `${firstCard.cardKey} QA integration tests`
+      : `${firstCard.cardKey} plus ${cards.length - 1} QA integration tests`
   const args = [
     "run",
     "--model",
     modelId,
     "--title",
-    `${card.cardKey} QA integration tests`,
+    title,
     "--dangerously-skip-permissions",
   ]
 
@@ -302,7 +322,7 @@ function qaAuthoringArgs(
     args.splice(3, 0, "--format", "json")
   }
 
-  args.push(buildQaPrompt(project, card))
+  args.push(buildQaPrompt(project, cards))
   return args
 }
 
@@ -310,13 +330,13 @@ async function runQaAuthoring(
   sandbox: Sandbox,
   modelId: string,
   project: QaProject,
-  card: QaCard,
+  cards: QaCard[],
 ) {
   try {
     return await sandboxStep("Writing integration tests", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, card, project, "json"),
+        args: qaAuthoringArgs(modelId, cards, project, "json"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -331,7 +351,7 @@ async function runQaAuthoring(
     return await sandboxStep("Retrying integration test authoring", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, card, project, "text"),
+        args: qaAuthoringArgs(modelId, cards, project, "text"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -343,14 +363,14 @@ async function runQaAuthoring(
 
 export async function runQaIntegration(input: QaRunInput) {
   const githubToken = getGitHubToken()
-  const kimiToken = getKimiToken()
-  const kimiModel = getKimiModel()
+  const glmToken = getGlmToken()
+  const glmModel = getGlmModel()
   const vercelToken = getVercelToken()
   const vercelTeamId = getVercelTeamId()
-  const modelId = opencodeModelId("moonshot", kimiModel)
+  const modelId = opencodeModelId("glm", glmModel)
   const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
   const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
-  const qaBranchName = buildQaBranchName(input.card, input.externalRunId)
+  const qaBranchName = buildQaBranchName(input.cards, input.externalRunId)
 
   const sandbox = await sandboxStep("Creating the QA sandbox", () =>
     Sandbox.create({
@@ -416,7 +436,7 @@ export async function runQaIntegration(input: QaRunInput) {
       sandbox.writeFiles([
         {
           path: OPENCODE_CONFIG_PATH,
-          content: Buffer.from(buildOpencodeConfig(kimiToken, kimiModel)),
+          content: Buffer.from(buildOpencodeConfig(glmToken, glmModel)),
         },
         {
           path: INTEGRATION_SCRIPT_PATH,
@@ -446,7 +466,7 @@ export async function runQaIntegration(input: QaRunInput) {
       sandbox,
       modelId,
       input.project,
-      input.card,
+      input.cards,
     )
     await assertCommand(qaAuthoring, "Writing integration tests")
     const qaSummary = "stdout" in qaAuthoring
@@ -522,7 +542,13 @@ export async function runQaIntegration(input: QaRunInput) {
         await sandboxStep("Committing QA changes", () =>
           sandbox.runCommand({
             cmd: "git",
-            args: ["commit", "-m", `Add integration tests for ${input.card.cardKey}`],
+            args: [
+              "commit",
+              "-m",
+              input.cards.length === 1
+                ? `Add integration tests for ${input.cards[0].cardKey}`
+                : `Add integration tests for ${input.cards.length} tasks`,
+            ],
             cwd: WORKDIR,
           }),
         ),
