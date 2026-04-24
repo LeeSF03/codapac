@@ -1,7 +1,9 @@
 "server-only"
 
 import { Sandbox } from "@vercel/sandbox"
+import type { Command, CommandFinished } from "@vercel/sandbox"
 
+import { DEFAULT_APP_STACK_GUIDANCE } from "@/lib/agents/default-stack"
 import type { ExecutionFeatureContext } from "@/lib/agents/execution-context"
 import {
   getGitHubToken,
@@ -12,7 +14,9 @@ import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
 const OPENCODE_CONFIG_PATH = "/tmp/codapac-qa-opencode.json"
-const QA_TASK_FILE_PATH = "/tmp/codapac-qa-task.md"
+const OPENCODE_TASK_PATH = "/tmp/codapac-qa-task.md"
+const OPENCODE_MAX_ATTEMPTS = 3
+const OPENCODE_CHUNK_TIMEOUT_MS = 45 * 60 * 1000
 const INTEGRATION_SCRIPT_PATH = "/tmp/codapac-run-integration.sh"
 const SANDBOX_TIMEOUT_MS = 45 * 60 * 1000
 const WORKDIR = "/vercel/sandbox"
@@ -40,10 +44,22 @@ type QaRunInput = {
   cards: QaCard[]
   branchName: string
   context?: ExecutionFeatureContext
+  reuseSandboxId?: string | null
+  reuseBranchName?: string | null
   onStarted?: (details: {
     sandboxId: string
     commandId: string | null
   }) => Promise<void>
+}
+
+function isRetryableOpencodeTermination(message: string) {
+  return /\b(terminated|stream ended|stream_ended_early|connection closed|command failed to finish)\b/i.test(
+    message,
+  )
+}
+
+function isRetryableNoChanges(message: string) {
+  return /without creating any file changes/i.test(message)
 }
 
 function parseGitHubRepoPath(repoUrl: string) {
@@ -102,6 +118,8 @@ function buildOpencodeConfig(glmToken: string, glmModel: string) {
           options: {
             apiKey: glmToken,
             baseURL: process.env.GLM_BASE_URL?.trim() || "https://api.ilmu.ai/v1",
+            timeout: false,
+            chunkTimeout: OPENCODE_CHUNK_TIMEOUT_MS,
           },
           models: {
             [glmModel]: {
@@ -141,18 +159,16 @@ function buildQaPrompt(
   cards: QaCard[],
   context?: ExecutionFeatureContext,
 ) {
-  const taskList = cards.map(formatQaTask).join("\n\n---\n\n")
-
   return [
-    "You are the QA agent for this repository.",
-    cards.length === 1
-      ? "Write integration tests for exactly one completed task."
-      : `Write integration tests for this grouped change covering ${cards.length} completed tasks.`,
-    "Do not write browser, end-to-end, Playwright, visual, or video-recording tests yet.",
-    "Prefer the repository's existing test framework. If no integration test setup exists, add a minimal integration test setup and a package script named test:integration.",
-    "Keep tests deterministic and local. Do not require external services, secrets, paid APIs, or production credentials.",
-    "Do not merge branches. Do not deploy. Do not commit or push. The host application handles git and preview deployment after tests pass.",
-    "The programmer's work has already been merged into main. Test the current main branch.",
+    "You are TESTEES, the QA agent for this repository.",
+    "Write or update Vitest integration tests only.",
+    "Do not write Playwright, browser E2E, visual, or video tests.",
+    DEFAULT_APP_STACK_GUIDANCE,
+    "Use Bun tooling by default when the repository does not clearly require another package manager.",
+    "Ensure the repository has a runnable integration test command named test:integration.",
+    "If needed, add or update Vitest config, jsdom setup, and testing-library dependencies to support the integration tests.",
+    "Keep the QA change focused on test coverage and the minimal supporting test configuration required to run it.",
+    "Do not commit or push. The host application will handle git after you finish.",
     "",
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
@@ -167,27 +183,23 @@ function buildQaPrompt(
       : "",
     "",
     "Completed work to verify:",
-    taskList,
+    cards.map(formatQaTask).join("\n\n---\n\n"),
     "",
-    "When done, summarize the integration test files or scripts you added.",
-  ].join("\n")
-}
-
-function buildQaAuthoringInstruction() {
-  return [
-    `Read the QA brief in ${QA_TASK_FILE_PATH}.`,
-    "Follow it exactly.",
-    "Write the needed integration tests into the repository.",
-    "Keep the response short and summarize only the test files or scripts you added.",
-  ].join(" ")
+    "When done, summarize what tests and supporting configuration you added or updated.",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 function buildIntegrationScript() {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_ROOT="\${PROJECT_ROOT:-.}"
+cd "$PROJECT_ROOT"
+
 if [ ! -f package.json ]; then
-  echo "No package.json found. QA integration tests need a JavaScript project root."
+  echo "No package.json found in $PROJECT_ROOT. QA integration tests need a JavaScript project root."
   exit 42
 fi
 
@@ -206,23 +218,16 @@ elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
   npm ci || npm install
   RUN_CMD=(npm run)
 else
-  npm install
-  RUN_CMD=(npm run)
+  bun install
+  RUN_CMD=(bun run)
 fi
 
 SCRIPT_NAME="$(node - <<'NODE'
 const scripts = require("./package.json").scripts || {};
-const candidates = [
-  "test:integration",
-  "integration",
-  "test:integrations",
-  "integrations",
-  "test:int",
-  "int:test"
-];
+const candidates = ["test:integration", "integration"];
 const found = candidates.find((name) => scripts[name]);
 if (!found) {
-  console.error("No integration test script found. QA expected a package script named test:integration or integration.");
+  console.error("No integration test script found. QA expected test:integration or integration.");
   process.exit(42);
 }
 console.log(found);
@@ -312,131 +317,218 @@ async function sandboxStep<T>(label: string, operation: () => Promise<T>) {
   }
 }
 
-function isRetryableQaAuthoringError(error: unknown) {
-  const message = errorMessage(error).toLowerCase()
-  return (
-    message.includes("stream ended before command finished") ||
-    message.includes("connection closed") ||
-    message.includes("socket hang up") ||
-    message.includes("terminated")
-  )
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function qaAuthoringArgs(
-  modelId: string,
-  cards: QaCard[],
-  format: "json" | "text",
-) {
-  const firstCard = cards[0]
-  const title =
-    cards.length === 1
-      ? `${firstCard.cardKey} QA integration tests`
-      : `${firstCard.cardKey} plus ${cards.length - 1} QA integration tests`
-  const args = [
-    "run",
-    "--model",
-    modelId,
-    "--title",
-    title,
-    "--dangerously-skip-permissions",
-  ]
-
-  if (format === "json") {
-    args.splice(3, 0, "--format", "json")
-  }
-
-  args.push(buildQaAuthoringInstruction())
-  return args
-}
-
-async function runQaAuthoring(
-  sandbox: Sandbox,
-  modelId: string,
-  cards: QaCard[],
-) {
-  try {
-    return await sandboxStep("Writing integration tests", () =>
-      sandbox.runCommand({
-        cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, "json"),
-        cwd: WORKDIR,
-        env: {
-          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-        },
-      }),
-    )
-  } catch (error) {
-    if (!isRetryableQaAuthoringError(error)) {
-      throw error
+async function streamCommandLogs(command: Command, prefix: string) {
+  for await (const log of command.logs()) {
+    const line = `${prefix} ${log.data}`
+    if (log.stream === "stdout") {
+      console.log(line)
+    } else {
+      console.error(line)
     }
-
-    return await sandboxStep("Retrying integration test authoring", () =>
-      sandbox.runCommand({
-        cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, "text"),
-        cwd: WORKDIR,
-        env: {
-          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-        },
-      }),
-    )
   }
+}
+
+async function runLoggedCommand(params: {
+  sandbox: Sandbox
+  label: string
+  prefix: string
+  cmd: string
+  args: string[]
+  cwd?: string
+  env?: Record<string, string>
+}) {
+  const command = await sandboxStep(params.label, () =>
+    params.sandbox.runCommand({
+      cmd: params.cmd,
+      args: params.args,
+      cwd: params.cwd,
+      env: params.env,
+      detached: true,
+    }),
+  )
+
+  const logTask = streamCommandLogs(command, params.prefix)
+  let finished: CommandFinished
+  try {
+    finished = await command.wait()
+  } finally {
+    await logTask.catch((error) => {
+      console.error(`${params.prefix} [log-stream-error] ${describeSandboxError(error)}`)
+    })
+  }
+
+  return {
+    command,
+    finished,
+  }
+}
+
+async function detectProjectRoot(sandbox: Sandbox) {
+  const command = await sandboxStep("Detecting project root", () =>
+    sandbox.runCommand({
+      cmd: "bash",
+      args: [
+        "-lc",
+        [
+          "set -euo pipefail",
+          'ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"',
+          'node - "$ROOT" <<\'NODE\'',
+          'const fs = require("node:fs")',
+          'const path = require("node:path")',
+          'const root = process.argv[2]',
+          'const skip = new Set(["node_modules", ".git", ".next", "dist", "build", ".turbo", ".vercel"])',
+          'function hasDir(base, name) {',
+          '  try {',
+          '    return fs.statSync(path.join(base, name)).isDirectory()',
+          '  } catch {',
+          '    return false',
+          '  }',
+          '}',
+          'function score(dir) {',
+          '  const rel = path.relative(root, dir).replace(/\\\\/g, "/")',
+          '  const depth = rel ? rel.split("/").length : 0',
+          '  let value = depth * 10',
+          '  if (hasDir(dir, "src")) value -= 3',
+          '  if (hasDir(dir, "app")) value -= 3',
+          '  if (hasDir(dir, "pages")) value -= 2',
+          '  if (hasDir(dir, "components")) value -= 1',
+          '  return value',
+          '}',
+          'const matches = []',
+          'const queue = [root]',
+          'while (queue.length > 0) {',
+          '  const dir = queue.shift()',
+          '  let entries = []',
+          '  try {',
+          '    entries = fs.readdirSync(dir, { withFileTypes: true })',
+          '  } catch {',
+          '    continue',
+          '  }',
+          '  for (const entry of entries) {',
+          '    const fullPath = path.join(dir, entry.name)',
+          '    if (entry.isDirectory()) {',
+          '      if (!skip.has(entry.name)) {',
+          '        queue.push(fullPath)',
+          '      }',
+          '      continue',
+          '    }',
+          '    if (entry.isFile() && entry.name === "package.json") {',
+          '      matches.push(dir)',
+          '    }',
+          '  }',
+          '}',
+          'if (fs.existsSync(path.join(root, "package.json"))) {',
+          '  process.stdout.write(root)',
+          '  process.exit(0)',
+          '}',
+          'if (matches.length > 0) {',
+          '  matches.sort((left, right) => score(left) - score(right) || left.localeCompare(right))',
+          '  process.stdout.write(matches[0])',
+          '  process.exit(0)',
+          '}',
+          'process.stdout.write(root)',
+          'NODE',
+        ].join("\n"),
+      ],
+      cwd: WORKDIR,
+    }),
+  )
+
+  await assertCommand(command, "Detecting project root")
+  const output = (await safeCommandOutput(command, "stdout")).trim()
+  if (!output) {
+    throw new Error("Could not determine the application root for QA.")
+  }
+
+  return output
 }
 
 export async function runQaIntegration(input: QaRunInput) {
   const githubToken = getGitHubToken()
-  const glmToken = getGlmToken()
-  const glmModel = getGlmModel()
   const vercelToken = getVercelToken()
   const vercelTeamId = getVercelTeamId()
+  const glmToken = getGlmToken()
+  const glmModel = getGlmModel()
   const modelId = opencodeModelId("glm", glmModel)
   const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
   const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
-  const qaBranchName = buildQaBranchName(input.cards, input.externalRunId)
+  const qaBranchName =
+    input.reuseBranchName?.trim() || buildQaBranchName(input.cards, input.externalRunId)
 
-  const sandbox = await sandboxStep("Creating the QA sandbox", () =>
-    Sandbox.create({
-      token: vercelToken,
-      teamId: vercelTeamId,
-      projectId: input.project.vercelProjectId,
-      runtime: "node22",
-      source: {
-        type: "git",
-        url: sourceRepoUrl,
-        username: "x-access-token",
-        password: githubToken,
-        revision: "main",
-        depth: 1,
-      },
-      timeout: SANDBOX_TIMEOUT_MS,
-      resources: { vcpus: 2 },
-    }),
-  )
+  let sandbox: Sandbox | null = null
+  let stopSandboxOnExit = true
+  let reusedSandbox = false
 
   try {
-    await assertCommand(
-      await sandboxStep("Creating the QA branch from main", () =>
-        sandbox.runCommand({
-          cmd: "git",
-          args: ["checkout", "-B", qaBranchName],
-          cwd: WORKDIR,
-        }),
-      ),
-      "Creating the QA branch from main",
-    )
+    if (input.reuseSandboxId?.trim()) {
+      try {
+        sandbox = await sandboxStep("Reopening the QA sandbox", () =>
+          Sandbox.get({
+            sandboxId: input.reuseSandboxId!.trim(),
+            token: vercelToken,
+            teamId: vercelTeamId,
+          }),
+        )
+        reusedSandbox = true
+        console.log(
+          `[TESTEES:${input.cards.map((card) => card.cardKey).join(",")}] reusing sandbox ${input.reuseSandboxId}`,
+        )
+      } catch (error) {
+        console.error(
+          `[TESTEES:${input.cards.map((card) => card.cardKey).join(",")}] unable to reopen sandbox ${input.reuseSandboxId}: ${describeSandboxError(error)}`,
+        )
+        sandbox = null
+      }
+    }
 
-    await input.onStarted?.({
-      sandboxId: sandbox.sandboxId,
-      commandId: null,
-    })
+    if (!sandbox) {
+      sandbox = await sandboxStep("Creating the QA sandbox", () =>
+        Sandbox.create({
+          token: vercelToken,
+          teamId: vercelTeamId,
+          projectId: input.project.vercelProjectId,
+          runtime: "node22",
+          source: {
+            type: "git",
+            url: sourceRepoUrl,
+            username: "x-access-token",
+            password: githubToken,
+            revision: "main",
+            depth: 1,
+          },
+          timeout: SANDBOX_TIMEOUT_MS,
+          resources: { vcpus: 2 },
+        }),
+      )
+      console.log(
+        `[TESTEES:${input.cards.map((card) => card.cardKey).join(",")}] created new sandbox ${sandbox.sandboxId}`,
+      )
+    }
+
+    const activeSandbox = sandbox
+
+    await assertCommand(
+      await sandboxStep(
+        reusedSandbox ? "Opening the QA branch" : "Creating the QA branch from main",
+        () =>
+          activeSandbox.runCommand({
+            cmd: "bash",
+            args: [
+              "-lc",
+              'git checkout "$BRANCH_NAME" || git checkout -B "$BRANCH_NAME"',
+            ],
+            cwd: WORKDIR,
+            env: {
+              BRANCH_NAME: qaBranchName,
+            },
+          }),
+      ),
+      reusedSandbox ? "Opening the QA branch" : "Creating the QA branch from main",
+    )
 
     await assertCommand(
       await sandboxStep("Installing OpenCode", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "bash",
           args: ["-lc", "curl -fsSL https://opencode.ai/install | bash"],
           env: {
@@ -448,27 +540,24 @@ export async function runQaIntegration(input: QaRunInput) {
     )
 
     await assertCommand(
-      await sandboxStep("Preparing QA files", () =>
-        sandbox.runCommand({
+      await sandboxStep("Preparing QA config directory", () =>
+        activeSandbox.runCommand({
           cmd: "mkdir",
           args: ["-p", "/tmp", ".vercel"],
-          cwd: WORKDIR,
         }),
       ),
-      "Preparing QA files",
+      "Preparing QA config directory",
     )
 
-    await sandboxStep("Writing QA config files", () =>
-      sandbox.writeFiles([
+    await sandboxStep("Writing QA config", () =>
+      activeSandbox.writeFiles([
         {
           path: OPENCODE_CONFIG_PATH,
           content: Buffer.from(buildOpencodeConfig(glmToken, glmModel)),
         },
         {
-          path: QA_TASK_FILE_PATH,
-          content: Buffer.from(
-            buildQaPrompt(input.project, input.cards, input.context),
-          ),
+          path: OPENCODE_TASK_PATH,
+          content: Buffer.from(buildQaPrompt(input.project, input.cards, input.context)),
         },
         {
           path: INTEGRATION_SCRIPT_PATH,
@@ -483,9 +572,95 @@ export async function runQaIntegration(input: QaRunInput) {
         },
       ]),
     )
+
+    let opencodeOutput = ""
+    let changedFiles = ""
+    let opencodeAttempt = 0
+
+    while (opencodeAttempt < OPENCODE_MAX_ATTEMPTS) {
+      opencodeAttempt += 1
+
+      try {
+        const run = await runLoggedCommand({
+          sandbox: activeSandbox,
+          label:
+            opencodeAttempt === 1
+              ? "Running QA OpenCode"
+              : `Continuing QA OpenCode (attempt ${opencodeAttempt})`,
+          prefix: `[TESTEES:${input.cards.map((card) => card.cardKey).join(",")}:attempt-${opencodeAttempt}]`,
+          cmd: OPENCODE_BIN,
+          args: [
+            "run",
+            "--model",
+            modelId,
+            "--print-logs",
+            "--file",
+            OPENCODE_TASK_PATH,
+            "--format",
+            "default",
+            "--title",
+            input.cards.length === 1
+              ? `${input.cards[0].cardKey} qa task`
+              : `${input.cards.length} grouped qa tasks`,
+            "--dangerously-skip-permissions",
+            opencodeAttempt === 1
+              ? "Read the attached QA brief, write or update the required Vitest integration tests and any minimal supporting test configuration, then summarize what changed."
+              : "Continue the QA work from the current repository state and any partial test changes already present. Finish the Vitest integration coverage and summarize what changed.",
+          ],
+          cwd: WORKDIR,
+          env: {
+            OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+          },
+        })
+        await input.onStarted?.({
+          sandboxId: activeSandbox.sandboxId,
+          commandId: run.command.cmdId,
+        })
+        await assertCommand(run.finished, "Running QA OpenCode")
+        opencodeOutput = await run.finished.stdout()
+          .then((output) => output.trim())
+          .catch((error) => describeSandboxError(error))
+
+        const status = await sandboxStep("Checking QA changes", () =>
+          activeSandbox.runCommand({
+            cmd: "git",
+            args: ["status", "--short"],
+            cwd: WORKDIR,
+          }),
+        )
+        await assertCommand(status, "Checking QA changes")
+        changedFiles = "stdout" in status
+          ? (await safeCommandOutput(status, "stdout")).trim()
+          : ""
+        if (changedFiles) {
+          break
+        }
+
+        if (opencodeAttempt < OPENCODE_MAX_ATTEMPTS) {
+          continue
+        }
+
+        throw new Error("QA finished without creating any file changes.")
+      } catch (error) {
+        const message = describeSandboxError(error)
+        if (
+          opencodeAttempt < OPENCODE_MAX_ATTEMPTS &&
+          (isRetryableOpencodeTermination(message) || isRetryableNoChanges(message))
+        ) {
+          continue
+        }
+
+        throw error
+      }
+    }
+
+    if (!changedFiles) {
+      throw new Error("QA finished without creating any file changes.")
+    }
+
     await assertCommand(
       await sandboxStep("Ignoring sandbox deployment metadata", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "bash",
           args: ["-lc", "printf '\\n.vercel/\\n' >> .git/info/exclude"],
           cwd: WORKDIR,
@@ -494,42 +669,24 @@ export async function runQaIntegration(input: QaRunInput) {
       "Ignoring sandbox deployment metadata",
     )
 
-    const qaAuthoring = await runQaAuthoring(
-      sandbox,
-      modelId,
-      input.cards,
-    )
-    await assertCommand(qaAuthoring, "Writing integration tests")
-    const qaSummary = "stdout" in qaAuthoring
-      ? (await safeCommandOutput(qaAuthoring, "stdout")).trim()
-      : ""
-
+    const projectRoot = await detectProjectRoot(activeSandbox)
     const integration = await sandboxStep("Running integration tests", () =>
-      sandbox.runCommand({
+      activeSandbox.runCommand({
         cmd: "bash",
         args: [INTEGRATION_SCRIPT_PATH],
         cwd: WORKDIR,
+        env: {
+          PROJECT_ROOT: projectRoot,
+        },
       }),
     )
     await assertCommand(integration, "Running integration tests")
     const integrationOutput =
       "stdout" in integration ? await safeCommandOutput(integration, "stdout") : ""
 
-    const status = await sandboxStep("Checking QA changes", () =>
-      sandbox.runCommand({
-        cmd: "git",
-        args: ["status", "--short"],
-        cwd: WORKDIR,
-      }),
-    )
-    await assertCommand(status, "Checking QA changes")
-    const changedFiles = "stdout" in status
-      ? (await safeCommandOutput(status, "stdout")).trim()
-      : ""
-
     await assertCommand(
       await sandboxStep("Configuring QA git user name", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["config", "user.name", "Codapac QA"],
           cwd: WORKDIR,
@@ -539,7 +696,7 @@ export async function runQaIntegration(input: QaRunInput) {
     )
     await assertCommand(
       await sandboxStep("Configuring QA git user email", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["config", "user.email", "codapac-qa@users.noreply.github.com"],
           cwd: WORKDIR,
@@ -549,7 +706,7 @@ export async function runQaIntegration(input: QaRunInput) {
     )
     await assertCommand(
       await sandboxStep("Preparing QA git access", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["remote", "set-url", "origin", authRepoUrl],
           cwd: WORKDIR,
@@ -557,69 +714,66 @@ export async function runQaIntegration(input: QaRunInput) {
       ),
       "Preparing QA git access",
     )
-
-    if (changedFiles) {
-      await assertCommand(
-        await sandboxStep("Staging QA changes", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: ["add", "-A"],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Staging QA changes",
-      )
-      await assertCommand(
-        await sandboxStep("Committing QA changes", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: [
-              "commit",
-              "-m",
-              input.cards.length === 1
-                ? `Add integration tests for ${input.cards[0].cardKey}`
-                : `Add integration tests for ${input.cards.length} tasks`,
-            ],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Committing QA changes",
-      )
-      await assertCommand(
-        await sandboxStep("Pushing QA changes", () =>
-          sandbox.runCommand({
-            cmd: "git",
-            args: ["push", "origin", `HEAD:${qaBranchName}`],
-            cwd: WORKDIR,
-          }),
-        ),
-        "Pushing QA changes",
-      )
-
-      await sandboxStep("Merging QA changes into main", () =>
-        mergeProjectBranchIntoMain({
-          repoUrl: input.project.repoUrl,
-          branchName: qaBranchName,
-          baseBranch: "main",
-          title:
+    await assertCommand(
+      await sandboxStep("Staging QA changes", () =>
+        activeSandbox.runCommand({
+          cmd: "git",
+          args: ["add", "-A"],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Staging QA changes",
+    )
+    await assertCommand(
+      await sandboxStep("Committing QA changes", () =>
+        activeSandbox.runCommand({
+          cmd: "git",
+          args: [
+            "commit",
+            "-m",
             input.cards.length === 1
               ? `Add integration tests for ${input.cards[0].cardKey}`
               : `Add integration tests for ${input.cards.length} tasks`,
-          body: [
-            "QA completed integration coverage for:",
-            ...input.cards.map((card) => `- ${card.cardKey}: ${card.title}`),
-          ].join("\n"),
-          commitMessage:
-            input.cards.length === 1
-              ? `Merge QA tests for ${input.cards[0].cardKey}`
-              : `Merge QA tests for ${input.cards.length} tasks`,
+          ],
+          cwd: WORKDIR,
         }),
-      )
-    }
+      ),
+      "Committing QA changes",
+    )
+    await assertCommand(
+      await sandboxStep("Pushing QA changes", () =>
+        activeSandbox.runCommand({
+          cmd: "git",
+          args: ["push", "origin", `HEAD:${qaBranchName}`],
+          cwd: WORKDIR,
+        }),
+      ),
+      "Pushing QA changes",
+    )
+
+    await sandboxStep("Merging QA changes into main", () =>
+      mergeProjectBranchIntoMain({
+        repoUrl: input.project.repoUrl,
+        branchName: qaBranchName,
+        baseBranch: "main",
+        title:
+          input.cards.length === 1
+            ? `Add integration tests for ${input.cards[0].cardKey}`
+            : `Add integration tests for ${input.cards.length} tasks`,
+        body: [
+          "QA completed integration coverage for:",
+          ...input.cards.map((card) => `- ${card.cardKey}: ${card.title}`),
+        ].join("\n"),
+        commitMessage:
+          input.cards.length === 1
+            ? `Merge QA tests for ${input.cards[0].cardKey}`
+            : `Merge QA tests for ${input.cards.length} tasks`,
+      }),
+    )
 
     await assertCommand(
       await sandboxStep("Checking out main for preview deployment", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["fetch", "origin", "main"],
           cwd: WORKDIR,
@@ -629,7 +783,7 @@ export async function runQaIntegration(input: QaRunInput) {
     )
     await assertCommand(
       await sandboxStep("Preparing main preview", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["checkout", "--detach", "FETCH_HEAD"],
           cwd: WORKDIR,
@@ -639,7 +793,7 @@ export async function runQaIntegration(input: QaRunInput) {
     )
 
     const deploy = await sandboxStep("Creating preview deployment", () =>
-      sandbox.runCommand({
+      activeSandbox.runCommand({
         cmd: "bash",
         args: [
           "-lc",
@@ -664,15 +818,25 @@ export async function runQaIntegration(input: QaRunInput) {
 
     return {
       previewDeploymentUrl,
-      summary: [
-        qaSummary.slice(-1_000),
-        integrationOutput.slice(-1_000),
-      ]
+      branchName: qaBranchName,
+      summary: [opencodeOutput.slice(-1_000), integrationOutput.slice(-1_000)]
         .filter(Boolean)
         .join("\n\n")
         .trim() || "QA wrote and passed integration tests.",
     }
+  } catch (error) {
+    const message = describeSandboxError(error)
+    if (sandbox && (isRetryableOpencodeTermination(message) || isRetryableNoChanges(message))) {
+      stopSandboxOnExit = false
+      throw new Error(
+        `OpenCode terminated before QA finished. The QA workspace was kept alive in sandbox ${sandbox.sandboxId} so the task can continue from the same files on retry.`,
+      )
+    }
+
+    throw error
   } finally {
-    await sandbox.stop({ blocking: true }).catch(() => null)
+    if (sandbox && stopSandboxOnExit) {
+      await sandbox.stop({ blocking: true }).catch(() => null)
+    }
   }
 }

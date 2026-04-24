@@ -50,6 +50,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "noop" }, { status: 202 })
   }
 
+  if (result.status === "programmer_retry_needed") {
+    return NextResponse.json(
+      result,
+      { status: 202 },
+    )
+  }
+
   const continuation = await runProjectLoop({
     projectId,
     trigger: "programmer_finished",

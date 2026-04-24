@@ -4,7 +4,7 @@ import {
   buildExecutionContextQuery,
   buildExecutionFeatureContext,
 } from "@/lib/agents/execution-context"
-import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server"
+import { fetchAuthAction, fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server"
 import {
   deleteVercelDeploymentByUrl,
   ensureVercelProject,
@@ -63,8 +63,16 @@ async function loadExecutionContext(
   })
 }
 
-function shouldHandBackToProgrammer(message: string) {
-  return /\b(running integration tests failed|test failed|tests failed|assertion|expected|received|failing test|failed test|npm err!|bun test)\b/i.test(
+function isExplicitAppLogicFailure(message: string) {
+  if (
+    /\b(gateway timeout|timed out|timeout|stream ended|stream_ended_early|terminated|connection closed|workspace was kept alive|without creating any file changes|creating the qa sandbox failed|reopening the qa sandbox failed|installing opencode failed|checking the vercel project failed|detecting project root failed|preparing qa git access failed|pushing qa changes failed|creating preview deployment failed|no package\.json found)\b/i.test(
+      message,
+    )
+  ) {
+    return false
+  }
+
+  return /\b(assertion|expected|received|failing test|failed test|test suite failed|tests failed|vitest|typeerror|referenceerror|syntaxerror|cannot find module|module not found|is not defined|failed to compile|build failed|npm err!|bun test)\b/i.test(
     message,
   )
 }
@@ -92,6 +100,37 @@ export async function launchQaExecution(input: {
 }) {
   const recoveryDepth = input.recoveryDepth ?? 0
   const externalRunId = `qa-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
+  const retryWorkspace =
+    input.cardKeys.length === 1
+      ? await fetchAuthQuery(api.projects.getCardState, {
+          projectId: input.projectId,
+          cardKey: input.cardKeys[0],
+        }).then((state) => {
+          if (!state) {
+            return null
+          }
+
+          const latestFailedQaJob = state.qaJobs.find(
+            (job) =>
+              job.status === "failed" &&
+              typeof job.sandboxId === "string" &&
+              job.sandboxId.length > 0,
+          )
+
+          if (!latestFailedQaJob) {
+            return null
+          }
+
+          return {
+            sandboxId: latestFailedQaJob.sandboxId,
+            branchName:
+              typeof latestFailedQaJob.branchName === "string" &&
+              latestFailedQaJob.branchName.length > 0
+                ? latestFailedQaJob.branchName
+                : null,
+          }
+        })
+      : null
 
   const claims = (
     await Promise.all(
@@ -153,6 +192,8 @@ export async function launchQaExecution(input: {
       cards,
       branchName: claim.branchName,
       context: executionContext,
+      reuseSandboxId: retryWorkspace?.sandboxId ?? null,
+      reuseBranchName: retryWorkspace?.branchName ?? null,
       onStarted: async ({ sandboxId, commandId }) => {
         for (const item of claims) {
           await fetchAuthMutation(api.projects.markQaExecutionStarted, {
@@ -205,7 +246,9 @@ export async function launchQaExecution(input: {
     }
   } catch (error) {
     const message = `QA launch failed while ${stage}: ${errorMessage(error)}`
-    const handBackToProgrammer = shouldHandBackToProgrammer(message)
+    const handBackToProgrammer = isExplicitAppLogicFailure(message)
+    const keepInPlace =
+      /workspace was kept alive/i.test(message) || !handBackToProgrammer
     const canAutoRecover = recoveryDepth < 2
 
     try {
@@ -216,6 +259,7 @@ export async function launchQaExecution(input: {
             projectId: input.projectId,
             jobId: item.jobId,
             error: message.slice(0, 1_500),
+            keepInPlace,
             reassignToProgrammer: handBackToProgrammer && canAutoRecover,
           }),
         )
@@ -236,7 +280,9 @@ export async function launchQaExecution(input: {
       await saveQaMessage(
         input.projectId,
         canAutoRecover
-          ? `I hit a problem while checking ${taskLabel}. I'll keep it in review so QA can retry instead of stopping the workflow.`
+          ? keepInPlace
+            ? `I hit a problem while checking ${taskLabel}, but I kept the QA workspace alive so it can continue from the same sandbox on retry.`
+            : `I hit a problem while checking ${taskLabel}. I'll keep it in review so QA can retry instead of stopping the workflow.`
           : `I couldn't approve ${taskLabel}. It is still waiting for review until the issue is fixed and checked again.`,
       )
     } catch (failureUpdateError) {

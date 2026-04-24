@@ -73,10 +73,12 @@ async function choosePreferredStep(
     return null
   }
 
-  const allProgrammerTodo = states.every(
-    (state) => state.card.agent === "ENG" && state.card.tone === "todo",
+  const allProgrammerRunnable = states.every(
+    (state) =>
+      state.card.agent === "ENG" &&
+      (state.card.tone === "todo" || state.card.tone === "progress"),
   )
-  if (allProgrammerTodo) {
+  if (allProgrammerRunnable) {
     return {
       kind: "programmer",
       cardKeys: states.map((state) => state.card.cardKey),
@@ -84,10 +86,12 @@ async function choosePreferredStep(
     }
   }
 
-  const allExplicitQaTodo = states.every(
-    (state) => state.card.agent === "QA" && state.card.tone === "todo",
+  const allExplicitQaRunnable = states.every(
+    (state) =>
+      state.card.agent === "QA" &&
+      (state.card.tone === "todo" || state.card.tone === "progress"),
   )
-  if (allExplicitQaTodo) {
+  if (allExplicitQaRunnable) {
     return {
       kind: "qa",
       cardKeys: states.map((state) => state.card.cardKey),

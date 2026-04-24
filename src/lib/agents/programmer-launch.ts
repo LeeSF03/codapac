@@ -4,7 +4,7 @@ import {
   buildExecutionContextQuery,
   buildExecutionFeatureContext,
 } from "@/lib/agents/execution-context"
-import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server"
+import { fetchAuthAction, fetchAuthMutation, fetchAuthQuery } from "@/lib/auth-server"
 import { createProjectRepository } from "@/lib/boss/github"
 import { ensureVercelProject } from "@/lib/boss/vercel"
 import { embedText } from "@/lib/boss/embeddings"
@@ -69,6 +69,37 @@ export async function launchProgrammerExecution(input: {
   cardKeys: string[]
 }) {
   const externalRunId = `programmer-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
+  const retryWorkspace =
+    input.cardKeys.length === 1
+      ? await fetchAuthQuery(api.projects.getCardState, {
+          projectId: input.projectId,
+          cardKey: input.cardKeys[0],
+        }).then((state) => {
+          if (!state) {
+            return null
+          }
+
+          const latestFailedProgrammerJob = state.programmerJobs.find(
+            (job) =>
+              job.status === "failed" &&
+              typeof job.sandboxId === "string" &&
+              job.sandboxId.length > 0,
+          )
+
+          if (!latestFailedProgrammerJob) {
+            return null
+          }
+
+          return {
+            sandboxId: latestFailedProgrammerJob.sandboxId,
+            branchName:
+              typeof latestFailedProgrammerJob.branchName === "string" &&
+              latestFailedProgrammerJob.branchName.length > 0
+                ? latestFailedProgrammerJob.branchName
+                : null,
+          }
+        })
+      : null
 
   const claims = (
     await Promise.all(
@@ -145,6 +176,8 @@ export async function launchProgrammerExecution(input: {
       },
       cards,
       context: executionContext,
+      reuseSandboxId: retryWorkspace?.sandboxId ?? null,
+      reuseBranchName: retryWorkspace?.branchName ?? null,
       onStarted: async ({ sandboxId, commandId, branchName }) => {
         await Promise.all(
           claims.map((item) =>
@@ -195,6 +228,7 @@ export async function launchProgrammerExecution(input: {
     }
   } catch (error) {
     const message = `Programmer launch failed while ${stage}: ${errorMessage(error)}`
+    const keepInProgress = /workspace was kept alive/i.test(message)
 
     try {
       await Promise.all(
@@ -204,21 +238,25 @@ export async function launchProgrammerExecution(input: {
             jobId: item.jobId,
             repoUrl,
             vercelProjectId,
+            keepInProgress,
             error: message.slice(0, 1_500),
           }),
         ),
       )
       await saveProgrammerMessage(
         input.projectId,
-        `I couldn't finish ${taskLabel}. I moved the task${claims.length === 1 ? "" : "s"} back to To Do so ${claims.length === 1 ? "it" : "they"} can be retried.`,
+        /workspace was kept alive/i.test(message)
+          ? `I couldn't finish ${taskLabel}, but I kept the workspace alive so ${claims.length === 1 ? "it" : "they"} can continue from the same sandbox on retry.`
+          : `I couldn't finish ${taskLabel}. I moved the task${claims.length === 1 ? "" : "s"} back to To Do so ${claims.length === 1 ? "it" : "they"} can be retried.`,
       )
     } catch (failureUpdateError) {
       console.error("Unable to record Programmer failure", failureUpdateError)
     }
 
     return {
-      status: "failed" as const,
+      status: keepInProgress ? ("programmer_retry_needed" as const) : ("failed" as const),
       error: message,
+      cardKeys: claims.map((item) => item.card.cardKey),
     }
   }
 }

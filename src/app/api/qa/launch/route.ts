@@ -78,5 +78,12 @@ export async function POST(request: Request) {
     )
   }
 
+  if (result.status === "qa_retry_needed") {
+    return NextResponse.json(
+      result,
+      { status: 202 },
+    )
+  }
+
   return NextResponse.json(result, { status: 202 })
 }
