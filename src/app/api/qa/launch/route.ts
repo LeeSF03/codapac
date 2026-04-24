@@ -2,11 +2,19 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import {
+  buildExecutionContextQuery,
+  buildExecutionFeatureContext,
+} from "@/lib/agents/execution-context"
+import {
   deleteVercelDeploymentByUrl,
   ensureVercelProject,
 } from "@/lib/boss/vercel"
 import { embedText } from "@/lib/boss/embeddings"
-import { fetchAuthMutation, getAuthUser } from "@/lib/auth-server"
+import {
+  fetchAuthAction,
+  fetchAuthMutation,
+  getAuthUser,
+} from "@/lib/auth-server"
 import { runQaIntegration } from "@/lib/qa/integration"
 
 import { api } from "~/convex/_generated/api"
@@ -39,6 +47,36 @@ async function saveQaMessage(projectId: Id<"projects">, content: string) {
   } catch (error) {
     console.error("Unable to save QA chat message", error)
   }
+}
+
+async function loadExecutionContext(
+  projectId: Id<"projects">,
+  project: {
+    name: string
+    description: string
+  },
+  cards: Array<{
+    cardKey: string
+    title: string
+    description: string
+  }>,
+) {
+  const query = buildExecutionContextQuery(project, cards)
+  const context = await fetchAuthAction(api.projectChatActions.buildReplyContext, {
+    projectId,
+    embedding: embedText(query),
+    recentLimit: 12,
+    semanticLimit: 8,
+  })
+
+  return buildExecutionFeatureContext({
+    project: {
+      name: context.project.name,
+      description: context.project.description || project.description,
+    },
+    cards,
+    messages: context.messages,
+  })
 }
 
 function shouldHandBackToProgrammer(message: string) {
@@ -101,6 +139,7 @@ export async function POST(request: Request) {
 
   const claim = claims[0]
   const previousDeploymentUrl = claim.project.latestPreviewDeploymentUrl
+  const cards = claims.map((item) => item.card)
   const taskLabel =
     claims.length === 1
       ? `${claim.card.cardKey}: ${claim.card.title}`
@@ -120,6 +159,14 @@ export async function POST(request: Request) {
       slug: claim.project.slug,
       repoUrl: claim.project.repoUrl,
     })
+    const executionContext = await loadExecutionContext(
+      projectId,
+      {
+        name: claim.project.name,
+        description: claim.project.description,
+      },
+      cards,
+    )
 
     stage = "writing and running integration tests"
     const result = await runQaIntegration({
@@ -131,8 +178,9 @@ export async function POST(request: Request) {
         repoUrl: claim.project.repoUrl,
         vercelProjectId: claim.project.vercelProjectId,
       },
-      cards: claims.map((item) => item.card),
+      cards,
       branchName: claim.branchName,
+      context: executionContext,
       onStarted: async ({ sandboxId, commandId }) => {
         for (const item of claims) {
           await fetchAuthMutation(api.projects.markQaExecutionStarted, {

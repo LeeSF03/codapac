@@ -2,6 +2,7 @@
 
 import { Sandbox } from "@vercel/sandbox"
 
+import type { ExecutionFeatureContext } from "@/lib/agents/execution-context"
 import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
 import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 
@@ -34,6 +35,7 @@ type ProgrammerRunInput = {
   externalRunId: string
   project: ProgrammerProject
   cards: ProgrammerCard[]
+  context?: ExecutionFeatureContext
   onStarted?: (details: {
     sandboxId: string
     commandId: string | null
@@ -140,7 +142,11 @@ function formatTaskForPrompt(card: ProgrammerCard, index: number) {
     .join("\n")
 }
 
-function buildPrompt(project: ProgrammerProject, cards: ProgrammerCard[]) {
+function buildPrompt(
+  project: ProgrammerProject,
+  cards: ProgrammerCard[],
+  context?: ExecutionFeatureContext,
+) {
   return [
     "You are the programmer agent for this repository.",
     cards.length === 1
@@ -152,6 +158,15 @@ function buildPrompt(project: ProgrammerProject, cards: ProgrammerCard[]) {
     "",
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
+    "",
+    "Feature brief:",
+    context?.featureSummary || project.description || "(none provided)",
+    context?.recentConversationSummary
+      ? ["", "Recent conversation summary:", context.recentConversationSummary].join("\n")
+      : "",
+    context?.groupedTaskRationale
+      ? ["", "Grouped-task rationale:", context.groupedTaskRationale].join("\n")
+      : "",
     "",
     "Tasks to implement:",
     cards.map(formatTaskForPrompt).join("\n\n"),
@@ -326,7 +341,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
             ? `${cards[0].cardKey} programmer task`
             : `${cards.length} grouped programmer tasks`,
           "--dangerously-skip-permissions",
-          buildPrompt(input.project, cards),
+          buildPrompt(input.project, cards, input.context),
         ],
         cwd: WORKDIR,
         env: {

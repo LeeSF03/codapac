@@ -2,6 +2,7 @@
 
 import { Sandbox } from "@vercel/sandbox"
 
+import type { ExecutionFeatureContext } from "@/lib/agents/execution-context"
 import { getGitHubToken } from "@/lib/boss/github"
 import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
@@ -34,6 +35,7 @@ type QaRunInput = {
   project: QaProject
   cards: QaCard[]
   branchName: string
+  context?: ExecutionFeatureContext
   onStarted?: (details: {
     sandboxId: string
     commandId: string | null
@@ -130,7 +132,11 @@ function formatQaTask(card: QaCard) {
   ].join("\n")
 }
 
-function buildQaPrompt(project: QaProject, cards: QaCard[]) {
+function buildQaPrompt(
+  project: QaProject,
+  cards: QaCard[],
+  context?: ExecutionFeatureContext,
+) {
   const taskList = cards.map(formatQaTask).join("\n\n---\n\n")
 
   return [
@@ -146,6 +152,15 @@ function buildQaPrompt(project: QaProject, cards: QaCard[]) {
     "",
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
+    "",
+    "Feature brief:",
+    context?.featureSummary || project.description || "(none provided)",
+    context?.recentConversationSummary
+      ? ["", "Recent conversation summary:", context.recentConversationSummary].join("\n")
+      : "",
+    context?.groupedTaskRationale
+      ? ["", "Grouped-task rationale:", context.groupedTaskRationale].join("\n")
+      : "",
     "",
     "Completed work to verify:",
     taskList,
@@ -302,6 +317,7 @@ function qaAuthoringArgs(
   modelId: string,
   cards: QaCard[],
   project: QaProject,
+  context: ExecutionFeatureContext | undefined,
   format: "json" | "text",
 ) {
   const firstCard = cards[0]
@@ -322,7 +338,7 @@ function qaAuthoringArgs(
     args.splice(3, 0, "--format", "json")
   }
 
-  args.push(buildQaPrompt(project, cards))
+  args.push(buildQaPrompt(project, cards, context))
   return args
 }
 
@@ -331,12 +347,13 @@ async function runQaAuthoring(
   modelId: string,
   project: QaProject,
   cards: QaCard[],
+  context?: ExecutionFeatureContext,
 ) {
   try {
     return await sandboxStep("Writing integration tests", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, project, "json"),
+        args: qaAuthoringArgs(modelId, cards, project, context, "json"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -351,7 +368,7 @@ async function runQaAuthoring(
     return await sandboxStep("Retrying integration test authoring", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, project, "text"),
+        args: qaAuthoringArgs(modelId, cards, project, context, "text"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -467,6 +484,7 @@ export async function runQaIntegration(input: QaRunInput) {
       modelId,
       input.project,
       input.cards,
+      input.context,
     )
     await assertCommand(qaAuthoring, "Writing integration tests")
     const qaSummary = "stdout" in qaAuthoring

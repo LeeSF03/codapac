@@ -1,10 +1,18 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import {
+  buildExecutionContextQuery,
+  buildExecutionFeatureContext,
+} from "@/lib/agents/execution-context"
 import { createProjectRepository } from "@/lib/boss/github"
 import { ensureVercelProject } from "@/lib/boss/vercel"
 import { runProgrammerWithOpencode } from "@/lib/programmer/opencode"
-import { fetchAuthMutation, getAuthUser } from "@/lib/auth-server"
+import {
+  fetchAuthAction,
+  fetchAuthMutation,
+  getAuthUser,
+} from "@/lib/auth-server"
 import { embedText } from "@/lib/boss/embeddings"
 
 import { api } from "~/convex/_generated/api"
@@ -39,6 +47,36 @@ async function saveProgrammerMessage(
   } catch (error) {
     console.error("Unable to save Programmer chat message", error)
   }
+}
+
+async function loadExecutionContext(
+  projectId: Id<"projects">,
+  project: {
+    name: string
+    description: string
+  },
+  cards: Array<{
+    cardKey: string
+    title: string
+    description: string
+  }>,
+) {
+  const query = buildExecutionContextQuery(project, cards)
+  const context = await fetchAuthAction(api.projectChatActions.buildReplyContext, {
+    projectId,
+    embedding: embedText(query),
+    recentLimit: 12,
+    semanticLimit: 8,
+  })
+
+  return buildExecutionFeatureContext({
+    project: {
+      name: context.project.name,
+      description: context.project.description || project.description,
+    },
+    cards,
+    messages: context.messages,
+  })
 }
 
 export async function POST(request: Request) {
@@ -90,6 +128,7 @@ export async function POST(request: Request) {
   let repoUrl = claim.project.repoUrl
   let vercelProjectId = claim.project.vercelProjectId ?? null
   let stage = "preparing the Programmer run"
+  const cards = claims.map((item) => item.card)
 
   try {
     if (!repoUrl) {
@@ -111,6 +150,14 @@ export async function POST(request: Request) {
     vercelProjectId = vercelProject.id
     const readyRepoUrl = repoUrl
     const readyVercelProjectId = vercelProject.id
+    const executionContext = await loadExecutionContext(
+      projectId,
+      {
+        name: claim.project.name,
+        description: claim.project.description,
+      },
+      cards,
+    )
 
     stage = "running OpenCode in the Vercel Sandbox"
     const result = await runProgrammerWithOpencode({
@@ -124,7 +171,8 @@ export async function POST(request: Request) {
         vercelTeamId: vercelProject.teamId,
         vercelToken: vercelProject.token,
       },
-      cards: claims.map((item) => item.card),
+      cards,
+      context: executionContext,
       onStarted: async ({ sandboxId, commandId, branchName }) => {
         await Promise.all(
           claims.map((item) =>
