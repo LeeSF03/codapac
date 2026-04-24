@@ -1,10 +1,14 @@
-import type { Route } from "next"
+import type { Metadata, Route } from "next"
 import { redirect } from "next/navigation"
 
 import { getAuthUser, hasUsername } from "@/lib/auth-server"
 
 import { SignInSteps } from "../_components/sign-in-steps"
 import { UsernameCard } from "./_components/username-card"
+
+export const metadata: Metadata = {
+  title: "Choose username",
+}
 
 export default async function UsernamePage() {
   const user = await getAuthUser()
