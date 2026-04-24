@@ -125,6 +125,8 @@ export async function POST(request: Request) {
         ? []
         : routingDecision.qaLaunchCards
     const qaLaunchCardKeys = qaLaunchCards.map((card) => card.cardKey)
+    const workflowTrigger =
+      routingDecision.action === "respond_only" ? "" : "chat_continue"
     const createdTodosReply = formatCreatedTodosReply(createdTodos)
 
     const replyAuthor: ProjectChatAgentAuthor =
@@ -170,11 +172,10 @@ export async function POST(request: Request) {
         headers: {
           "content-type": "text/plain; charset=utf-8",
           "x-codapac-chat-author": "BOSS",
-          "x-codapac-launch-card-groups": encodeURIComponent(
-            JSON.stringify(programmerLaunchGroups),
-          ),
-          "x-codapac-launch-card-keys": programmerLaunchCardKeys.join(","),
-          "x-codapac-qa-card-keys": qaLaunchCardKeys.join(","),
+          "x-codapac-workflow-trigger": "",
+          "x-codapac-launch-card-groups": encodeURIComponent(JSON.stringify([])),
+          "x-codapac-launch-card-keys": "",
+          "x-codapac-qa-card-keys": "",
         },
       })
     }
@@ -211,6 +212,7 @@ export async function POST(request: Request) {
     return result.toTextStreamResponse({
       headers: {
         "x-codapac-chat-author": replyAuthor,
+        "x-codapac-workflow-trigger": workflowTrigger,
         "x-codapac-launch-card-groups": encodeURIComponent(
           JSON.stringify(programmerLaunchGroups),
         ),

@@ -39,6 +39,11 @@ export type BoardCard = {
   tone: Tone
   createdAt: number
   updatedAt: number
+  latestFailure?: {
+    stage: "programmer" | "qa"
+    error: string
+    updatedAt: number
+  } | null
 }
 
 export type BoardActivityEntry = {

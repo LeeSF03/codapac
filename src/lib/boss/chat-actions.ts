@@ -61,16 +61,25 @@ const agentRoutingDecisionSchema = z.object({
   rationale: z.string().trim().min(1).max(400),
 })
 
+const executionNudgeSchema = z.object({
+  action: z.enum(["respond_only", "start_programmer", "start_qa"]),
+  programmerCardKeys: z.array(z.string().trim().min(1)).max(8),
+  qaCardKeys: z.array(z.string().trim().min(1)).max(8),
+  rationale: z.string().trim().min(1).max(400),
+})
+
 type GeneratedCardDraft = z.infer<typeof generatedCardSchema>
 type AgentRoutingDecisionDraft = z.infer<typeof agentRoutingDecisionSchema>
+type ExecutionNudgeDraft = z.infer<typeof executionNudgeSchema>
 type LaunchCard = { cardKey: string; title: string }
 type AgentRoutingDecision = {
   replyAuthor: "BOSS" | "PROGRAMMER" | "QA"
+  action: "respond_only" | "start_programmer" | "start_qa"
   programmerLaunchCards: LaunchCard[]
   qaLaunchCards: LaunchCard[]
 }
 
-function parseJsonObject(value: string) {
+function extractJsonObjectSource(value: string) {
   const trimmed = value.trim()
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
   const source = fenced?.[1] ?? trimmed
@@ -79,7 +88,67 @@ function parseJsonObject(value: string) {
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
     throw new Error("Card draft response did not contain a JSON object.")
   }
-  return JSON.parse(source.slice(firstBrace, lastBrace + 1)) as unknown
+
+  return source
+    .slice(firstBrace, lastBrace + 1)
+    .replace(/\u0000/g, "")
+    .trim()
+}
+
+function parseJsonObject(value: string) {
+  return JSON.parse(extractJsonObjectSource(value)) as unknown
+}
+
+async function repairJsonObject(
+  rawValue: string,
+  shapeHint: string,
+) {
+  const result = await generateText({
+    model: getGlmLanguageModel(),
+    temperature: getGlmTemperature(),
+    maxOutputTokens: 2_000,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You repair malformed JSON.",
+          "Return one valid JSON object only.",
+          "Do not add markdown fences.",
+          "Do not change the meaning of the payload more than necessary.",
+        ].join(" "),
+      },
+      {
+        role: "user",
+        content: [
+          "Repair this malformed JSON so it parses as a single JSON object.",
+          `Expected shape: ${shapeHint}`,
+          "",
+          rawValue,
+        ].join("\n"),
+      },
+    ],
+  })
+
+  return parseJsonObject(result.text)
+}
+
+async function parseJsonObjectWithRepair(
+  value: string,
+  shapeHint: string,
+) {
+  try {
+    return parseJsonObject(value)
+  } catch {
+    const repairInput = (() => {
+      try {
+        return extractJsonObjectSource(value)
+      } catch {
+        return value
+      }
+    })()
+
+    return await repairJsonObject(repairInput, shapeHint)
+  }
 }
 
 function normalizeGeneratedCardDraft(
@@ -111,10 +180,11 @@ function normalizeGeneratedCardDraft(
     record.priority === "high"
       ? record.priority
       : intent.priority
-  const agent =
+  const rawAgent =
     record.agent === "PM" || record.agent === "ENG" || record.agent === "QA"
       ? record.agent
       : intent.agent
+  const agent = rawAgent === "QA" ? "QA" : "ENG"
   const tags = Array.isArray(record.tags)
     ? record.tags
         .filter((item): item is string => typeof item === "string")
@@ -170,6 +240,9 @@ const NEXT_STEP_COMMAND =
 const QUESTION_ONLY =
   /^(what|why|how|when|where|who|can you explain|summari[sz]e|tell me|status|is there)\b/i
 
+const EXECUTION_CONFIRMATION =
+  /^(?:alright|all right|ok|okay|sure|yep|yeah|go ahead|proceed|continue|carry on|crack on|start now|begin|you can start|do it|let'?s go)[.! ]*$/i
+
 function titleCase(value: string) {
   return value
     .trim()
@@ -203,10 +276,7 @@ function inferAgent(message: string): "PM" | "ENG" | "QA" {
   if (/\b(test|qa|verify|check|review|regression|acceptance)\b/.test(lower)) {
     return "QA"
   }
-  if (/\b(code|build|implement|develop|make|create|add|fix|app|page|button|input|feature|ui|todo|delete|checkbox)\b/.test(lower)) {
-    return "ENG"
-  }
-  return "PM"
+  return "ENG"
 }
 
 function inferPriority(message: string): "low" | "medium" | "high" {
@@ -298,6 +368,22 @@ export function isQaExecutionIntent(message: string) {
   return QA_COMMAND.test(trimmed) || (NEXT_STEP_COMMAND.test(trimmed) && !QUESTION_ONLY.test(trimmed))
 }
 
+function hasProgrammerTodoCards(context?: ChatIntentContext) {
+  return (context?.cards ?? []).some(
+    (card) => card.tone === "todo" && card.agent === "ENG",
+  )
+}
+
+function isExplicitQaRequest(message: string) {
+  const trimmed = message.trim()
+  return QA_COMMAND.test(trimmed)
+}
+
+function isGenericContinueRequest(message: string) {
+  const trimmed = message.trim()
+  return NEXT_STEP_COMMAND.test(trimmed) && !QUESTION_ONLY.test(trimmed) && !QA_COMMAND.test(trimmed)
+}
+
 export function inferQaLaunchCards(
   message: string,
   context?: ChatIntentContext,
@@ -306,8 +392,12 @@ export function inferQaLaunchCards(
     return []
   }
 
+  if (isGenericContinueRequest(message) && hasProgrammerTodoCards(context)) {
+    return []
+  }
+
   const readyForReview = (context?.cards ?? [])
-    .filter((card) => card.tone === "done")
+    .filter((card) => (card.agent === "QA" && card.tone === "todo") || card.tone === "done")
     .map((card) => ({
       cardKey: card.cardKey ?? "",
       title: card.title,
@@ -412,7 +502,7 @@ function qaCandidates(context?: ChatIntentContext) {
   return Array.from(
     new Map(
       (context?.cards ?? [])
-        .filter((card) => card.tone === "done")
+        .filter((card) => (card.agent === "QA" && card.tone === "todo") || card.tone === "done")
         .map((card) => ({
           cardKey: card.cardKey ?? "",
           title: card.title,
@@ -454,6 +544,7 @@ function fallbackAgentRoutingDecision(
   if (qaLaunchCards.length > 0) {
     return {
       replyAuthor: "QA",
+      action: "start_qa",
       programmerLaunchCards: [],
       qaLaunchCards,
     }
@@ -466,6 +557,7 @@ function fallbackAgentRoutingDecision(
   ) {
     return {
       replyAuthor: "PROGRAMMER",
+      action: "start_programmer",
       programmerLaunchCards,
       qaLaunchCards: [],
     }
@@ -473,6 +565,7 @@ function fallbackAgentRoutingDecision(
 
   return {
     replyAuthor: "BOSS",
+    action: "respond_only",
     programmerLaunchCards: [],
     qaLaunchCards: [],
   }
@@ -493,6 +586,7 @@ function normalizeAgentRoutingDecision(
   if (qaLaunchCards.length > 0) {
     return {
       replyAuthor: "QA" as const,
+      action: "start_qa" as const,
       programmerLaunchCards: [],
       qaLaunchCards,
     }
@@ -501,6 +595,7 @@ function normalizeAgentRoutingDecision(
   if (programmerLaunchCards.length > 0) {
     return {
       replyAuthor: "PROGRAMMER" as const,
+      action: "start_programmer" as const,
       programmerLaunchCards,
       qaLaunchCards: [],
     }
@@ -508,6 +603,7 @@ function normalizeAgentRoutingDecision(
 
   return {
     replyAuthor: draft.responseAgent,
+    action: "respond_only" as const,
     programmerLaunchCards: [],
     qaLaunchCards: [],
   }
@@ -542,12 +638,13 @@ function buildAgentRoutingPrompt(
     "Agents:",
     "- BOSS: product manager. Use for planning, clarification, prioritization, and non-execution replies.",
     "- PROGRAMMER: FIXER. Use when the user wants building/coding/implementation to start or continue.",
-    "- QA: TESTEES. Use when the user wants checking/testing/review, or when the next actionable cards are ready for review.",
+    "- QA: TESTEES. Use when the user wants checking/testing/review, or when explicit QA cards or review-ready cards should run next.",
     "",
     "Execution rules:",
     "- If the user asks to build, start building, code, implement, execute, run the work, or continue implementation, choose PROGRAMMER and start_programmer with relevant To Do build cards.",
-    "- If the user asks to proceed/continue and there are QA-ready Done cards, choose QA and start_qa.",
-    "- If the user asks to proceed/continue and there are To Do build cards but no QA-ready Done cards, choose PROGRAMMER and start_programmer.",
+    "- If the user asks to proceed/continue and there are remaining To Do build cards, prefer PROGRAMMER and start_programmer.",
+    "- Only choose QA on proceed/continue when there is no remaining To Do build work, or when the user explicitly asks to test, verify, review, or QA.",
+    '- Short confirmations such as "start now", "go ahead", "proceed", "continue", "you can start", or "begin" usually mean execution should start if executable cards already exist.',
     "- If the user is still discussing scope, choices, or priorities, choose BOSS and respond_only.",
     "- Do not choose BOSS when the user clearly asks to start execution and executable cards are available.",
     "- Only select card keys from the candidate lists below. Never invent card keys.",
@@ -560,7 +657,7 @@ function buildAgentRoutingPrompt(
       ? programmerCards.map((card) => `- ${card.cardKey}: ${card.title}`).join("\n")
       : "none",
     "",
-    "QA Done candidates:",
+    "QA candidates:",
     qaCards.length > 0
       ? qaCards.map((card) => `- ${card.cardKey}: ${card.title}`).join("\n")
       : "none",
@@ -573,9 +670,192 @@ function buildAgentRoutingPrompt(
     "",
     `Latest user message: ${userMessage}`,
     "",
+    "Examples:",
+    '- If the latest user message is "Alright, you can start now" and there are programmer To Do candidates, return PROGRAMMER with start_programmer and the relevant card keys.',
+    '- If the latest user message is "Please test it now" and there are QA candidates, return QA with start_qa and the relevant card keys.',
+    '- If the latest user message is "Which option is better?" return BOSS with respond_only.',
+    "",
     "Return JSON only with this shape:",
     '{"responseAgent":"BOSS|PROGRAMMER|QA","action":"respond_only|start_programmer|start_qa","programmerCardKeys":["CARD-1"],"qaCardKeys":["CARD-2"],"rationale":"short reason"}',
   ].join("\n")
+}
+
+function buildExecutionNudgePrompt(
+  userMessage: string,
+  programmerCards: LaunchCard[],
+  qaCards: LaunchCard[],
+  context?: ChatIntentContext,
+) {
+  const recentMessages = (context?.messages ?? [])
+    .slice(-8)
+    .map((message) => `${message.author}: ${message.content}`)
+    .join("\n")
+
+  return [
+    "Decide whether the latest user message means execution should start right now.",
+    "This is only for ambiguous follow-up messages after tasks already exist.",
+    "Prefer start_programmer when the message is a brief confirmation to begin queued build work.",
+    "Prefer start_qa when the message is a brief confirmation to begin queued QA work.",
+    'Phrases like "start now", "go ahead", "proceed", "continue", "crack on", "carry on", "you can start", and "begin" usually mean execution should start if relevant queued cards exist.',
+    "Return respond_only only if the message is not actually authorizing execution.",
+    "",
+    `Project: ${context?.project?.name ?? "Unknown"} (${context?.project?.slug ?? "unknown"})`,
+    "",
+    "Programmer candidates:",
+    programmerCards.length > 0
+      ? programmerCards.map((card) => `- ${card.cardKey}: ${card.title}`).join("\n")
+      : "none",
+    "",
+    "QA candidates:",
+    qaCards.length > 0
+      ? qaCards.map((card) => `- ${card.cardKey}: ${card.title}`).join("\n")
+      : "none",
+    "",
+    "Recent conversation:",
+    recentMessages || "(none)",
+    "",
+    `Latest user message: ${userMessage}`,
+    "",
+    "Examples:",
+    '- "Alright, crack on" with programmer candidates -> start_programmer.',
+    '- "Go ahead and test it" with QA candidates -> start_qa.',
+    '- "What is left?" -> respond_only.',
+    "",
+    "Return JSON only with this shape:",
+    '{"action":"respond_only|start_programmer|start_qa","programmerCardKeys":["CARD-1"],"qaCardKeys":["CARD-2"],"rationale":"short reason"}',
+  ].join("\n")
+}
+
+async function maybeNudgeExecutionStart(
+  userMessage: string,
+  context: ChatIntentContext | undefined,
+  programmerCards: LaunchCard[],
+  qaCards: LaunchCard[],
+  decision: AgentRoutingDecision,
+) {
+  if (decision.programmerLaunchCards.length > 0 || decision.qaLaunchCards.length > 0) {
+    return decision
+  }
+
+  if (decision.replyAuthor !== "BOSS") {
+    return decision
+  }
+
+  if (programmerCards.length === 0 && qaCards.length === 0) {
+    return decision
+  }
+
+  try {
+    const result = await generateObject({
+      model: getGlmLanguageModel(),
+      temperature: getGlmTemperature(),
+      schema: executionNudgeSchema,
+      prompt: buildExecutionNudgePrompt(
+        userMessage,
+        programmerCards,
+        qaCards,
+        context,
+      ),
+    })
+
+    const draft: ExecutionNudgeDraft = result.object
+    const programmerLaunchCards =
+      draft.action === "start_programmer"
+        ? pickAllowedCards(draft.programmerCardKeys, programmerCards)
+        : []
+    const qaLaunchCards =
+      draft.action === "start_qa"
+        ? pickAllowedCards(draft.qaCardKeys, qaCards)
+        : []
+
+    if (qaLaunchCards.length > 0) {
+      return {
+        replyAuthor: "QA" as const,
+        action: "start_qa" as const,
+        programmerLaunchCards: [],
+        qaLaunchCards,
+      }
+    }
+
+    if (programmerLaunchCards.length > 0) {
+      return {
+        replyAuthor: "PROGRAMMER" as const,
+        action: "start_programmer" as const,
+        programmerLaunchCards,
+        qaLaunchCards: [],
+      }
+    }
+  } catch {
+    return decision
+  }
+
+  return decision
+}
+
+function preferProgrammerForGenericContinue(
+  userMessage: string,
+  programmerCards: LaunchCard[],
+  qaCards: LaunchCard[],
+  decision: AgentRoutingDecision,
+) {
+  if (!isGenericContinueRequest(userMessage)) {
+    return decision
+  }
+
+  if (isExplicitQaRequest(userMessage)) {
+    return decision
+  }
+
+  if (programmerCards.length === 0) {
+    return decision
+  }
+
+  if (decision.programmerLaunchCards.length > 0) {
+    return decision
+  }
+
+  return {
+    replyAuthor: "PROGRAMMER" as const,
+    action: "start_programmer" as const,
+    programmerLaunchCards: [programmerCards[0]],
+    qaLaunchCards: [],
+  }
+}
+
+function forceExecutionStartFromConfirmation(
+  userMessage: string,
+  programmerCards: LaunchCard[],
+  qaCards: LaunchCard[],
+  decision: AgentRoutingDecision,
+) {
+  if (decision.programmerLaunchCards.length > 0 || decision.qaLaunchCards.length > 0) {
+    return decision
+  }
+
+  const trimmed = userMessage.trim()
+  if (!EXECUTION_CONFIRMATION.test(trimmed)) {
+    return decision
+  }
+
+  if (programmerCards.length > 0) {
+  return {
+    replyAuthor: "PROGRAMMER" as const,
+    action: "start_programmer" as const,
+    programmerLaunchCards: [programmerCards[0]],
+    qaLaunchCards: [],
+  }
+}
+
+  if (qaCards.length > 0) {
+    return {
+      replyAuthor: "QA" as const,
+      action: "start_qa" as const,
+      programmerLaunchCards: [],
+      qaLaunchCards: [qaCards[0]],
+    }
+  }
+
+  return decision
 }
 
 export async function generateAgentRoutingDecision(
@@ -594,13 +874,43 @@ export async function generateAgentRoutingDecision(
       prompt: buildAgentRoutingPrompt(userMessage, context, createdTodos),
     })
 
-    return normalizeAgentRoutingDecision(
+    const decision = normalizeAgentRoutingDecision(
       result.object,
       programmerCards,
       qaCards,
     )
+
+    const nudgedDecision = await maybeNudgeExecutionStart(
+      userMessage,
+      context,
+      programmerCards,
+      qaCards,
+      decision,
+    )
+
+    return forceExecutionStartFromConfirmation(
+      userMessage,
+      programmerCards,
+      qaCards,
+      preferProgrammerForGenericContinue(
+        userMessage,
+        programmerCards,
+        qaCards,
+        nudgedDecision,
+      ),
+    )
   } catch {
-    return fallbackAgentRoutingDecision(userMessage, context, createdTodos)
+    return forceExecutionStartFromConfirmation(
+      userMessage,
+      programmerCards,
+      qaCards,
+      preferProgrammerForGenericContinue(
+        userMessage,
+        programmerCards,
+        qaCards,
+        fallbackAgentRoutingDecision(userMessage, context, createdTodos),
+      ),
+    )
   }
 }
 
@@ -888,7 +1198,7 @@ function buildCardDraftPrompt(
     "- acceptanceCriteria: simple checklist items a non-technical user can verify.",
     "- priority: low, medium, or high.",
     "- tags: lowercase kebab-case labels.",
-    "- agent: ENG for building or changing the product, QA for checking/testing, PM for planning or clarification.",
+    "- agent: ENG for building or changing the product, QA for checking/testing.",
   ].join("\n")
 }
 
@@ -913,7 +1223,8 @@ function buildCardDraftsPrompt(
     "If the user says expected cards are missing, recreate the cards from the most recent BOSS message that claimed tasks were added.",
     "When the user selects an option, create the concrete tasks implied by that selected option and any lower-level basics included by that option.",
     "Do not create cards for pure questions, status checks, or broad discussion without a clear decision.",
-    "Use ENG for building or changing the product, QA for checking/testing, and PM for planning or clarification.",
+    "Use ENG for building or changing the product, and QA for checking/testing.",
+    "Do not create PM cards. BOSS handles planning in chat instead of assigning work to itself.",
     "Return concise, concrete content for a non-technical user.",
     "Do not mention deployment, hosting, repositories, tokens, branches, file names, frameworks, environments, or implementation strategy.",
     "",
@@ -929,7 +1240,7 @@ function buildCardDraftsPrompt(
     `Latest user message: ${userMessage}`,
     "",
     "Output shape:",
-    '{"todos":[{"title":"short action title","description":"plain language outcome","acceptanceCriteria":["simple user-verifiable checklist item"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"PM|ENG|QA"}]}',
+    '{"todos":[{"title":"short action title","description":"plain language outcome","acceptanceCriteria":["simple user-verifiable checklist item"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"ENG|QA"}]}',
   ].join("\n")
 }
 
@@ -948,7 +1259,7 @@ export async function generateChatCardDraft(
       prompt,
     })
 
-    return result.object
+    return normalizeGeneratedCardDraft(result.object, userMessage, intent)
   } catch {
     const result = await generateText({
       model: getGlmLanguageModel(),
@@ -962,12 +1273,15 @@ export async function generateChatCardDraft(
         },
         {
           role: "user",
-          content: `${prompt}\n\nJSON shape:\n{"title":"string","description":"plain language outcome","acceptanceCriteria":["simple user-verifiable checklist item"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"PM|ENG|QA"}`,
+          content: `${prompt}\n\nJSON shape:\n{"title":"string","description":"plain language outcome","acceptanceCriteria":["simple user-verifiable checklist item"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"ENG|QA"}`,
         },
       ],
     })
 
-    const parsed = parseJsonObject(result.text)
+    const parsed = await parseJsonObjectWithRepair(
+      result.text,
+      '{"title":"string","description":"string","acceptanceCriteria":["string"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"ENG|QA"}',
+    )
     return normalizeGeneratedCardDraft(parsed, userMessage, intent)
   }
 }
@@ -976,10 +1290,6 @@ export async function generateChatCardDrafts(
   userMessage: string,
   context?: ChatIntentContext,
 ): Promise<GeneratedCardDraft[]> {
-  if (!shouldInferTodoCards(userMessage, context)) {
-    return []
-  }
-
   const prompt = buildCardDraftsPrompt(userMessage, context)
   const fallbackIntent = inferChatTodoIntent(userMessage, context)
 
@@ -991,8 +1301,17 @@ export async function generateChatCardDrafts(
       prompt,
     })
 
-    return uniqueNewDrafts(result.object.todos, context)
+    return uniqueNewDrafts(
+      result.object.todos.map((todo) =>
+        normalizeGeneratedCardDraft(todo, userMessage, fallbackIntent),
+      ),
+      context,
+    )
   } catch {
+    if (!shouldInferTodoCards(userMessage, context)) {
+      return []
+    }
+
     const result = await generateText({
       model: getGlmLanguageModel(),
       temperature: getGlmTemperature(),
@@ -1010,7 +1329,10 @@ export async function generateChatCardDrafts(
       ],
     })
 
-    const parsed = parseJsonObject(result.text)
+    const parsed = await parseJsonObjectWithRepair(
+      result.text,
+      '{"todos":[{"title":"string","description":"string","acceptanceCriteria":["string"],"priority":"low|medium|high","tags":["lowercase-kebab-case"],"agent":"ENG|QA"}]}',
+    )
     const input = parsed && typeof parsed === "object" ? parsed : {}
     const todos = Array.isArray((input as Record<string, unknown>).todos)
       ? ((input as Record<string, unknown>).todos as unknown[])

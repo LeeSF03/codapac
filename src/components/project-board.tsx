@@ -107,6 +107,16 @@ function CardItem({
       <h4 className="mt-1.5 text-[13.5px] font-semibold leading-snug transition-colors group-hover:text-foreground">
         {card.title}
       </h4>
+      {card.latestFailure?.error ? (
+        <div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-[11px] leading-snug text-destructive">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-destructive/80">
+            {card.latestFailure.stage === "qa" ? "QA failure" : "Build failure"}
+          </div>
+          <p className="mt-1 text-[11px] leading-snug text-destructive/90">
+            {card.latestFailure.error}
+          </p>
+        </div>
+      ) : null}
       <div className="mt-2.5 flex items-center justify-between">
         <div className="flex flex-wrap gap-1">
           {card.tags.map((t) => (

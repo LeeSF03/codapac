@@ -3,12 +3,16 @@
 import { Sandbox } from "@vercel/sandbox"
 
 import type { ExecutionFeatureContext } from "@/lib/agents/execution-context"
-import { getGitHubToken } from "@/lib/boss/github"
+import {
+  getGitHubToken,
+  mergeProjectBranchIntoMain,
+} from "@/lib/boss/github"
 import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 import { getVercelTeamId, getVercelToken } from "@/lib/boss/vercel"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
 const OPENCODE_CONFIG_PATH = "/tmp/codapac-qa-opencode.json"
+const QA_TASK_FILE_PATH = "/tmp/codapac-qa-task.md"
 const INTEGRATION_SCRIPT_PATH = "/tmp/codapac-run-integration.sh"
 const SANDBOX_TIMEOUT_MS = 45 * 60 * 1000
 const WORKDIR = "/vercel/sandbox"
@@ -169,6 +173,15 @@ function buildQaPrompt(
   ].join("\n")
 }
 
+function buildQaAuthoringInstruction() {
+  return [
+    `Read the QA brief in ${QA_TASK_FILE_PATH}.`,
+    "Follow it exactly.",
+    "Write the needed integration tests into the repository.",
+    "Keep the response short and summarize only the test files or scripts you added.",
+  ].join(" ")
+}
+
 function buildIntegrationScript() {
   return `#!/usr/bin/env bash
 set -euo pipefail
@@ -316,8 +329,6 @@ function errorMessage(error: unknown) {
 function qaAuthoringArgs(
   modelId: string,
   cards: QaCard[],
-  project: QaProject,
-  context: ExecutionFeatureContext | undefined,
   format: "json" | "text",
 ) {
   const firstCard = cards[0]
@@ -338,22 +349,20 @@ function qaAuthoringArgs(
     args.splice(3, 0, "--format", "json")
   }
 
-  args.push(buildQaPrompt(project, cards, context))
+  args.push(buildQaAuthoringInstruction())
   return args
 }
 
 async function runQaAuthoring(
   sandbox: Sandbox,
   modelId: string,
-  project: QaProject,
   cards: QaCard[],
-  context?: ExecutionFeatureContext,
 ) {
   try {
     return await sandboxStep("Writing integration tests", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, project, context, "json"),
+        args: qaAuthoringArgs(modelId, cards, "json"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -368,7 +377,7 @@ async function runQaAuthoring(
     return await sandboxStep("Retrying integration test authoring", () =>
       sandbox.runCommand({
         cmd: OPENCODE_BIN,
-        args: qaAuthoringArgs(modelId, cards, project, context, "text"),
+        args: qaAuthoringArgs(modelId, cards, "text"),
         cwd: WORKDIR,
         env: {
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
@@ -456,6 +465,12 @@ export async function runQaIntegration(input: QaRunInput) {
           content: Buffer.from(buildOpencodeConfig(glmToken, glmModel)),
         },
         {
+          path: QA_TASK_FILE_PATH,
+          content: Buffer.from(
+            buildQaPrompt(input.project, input.cards, input.context),
+          ),
+        },
+        {
           path: INTEGRATION_SCRIPT_PATH,
           content: Buffer.from(buildIntegrationScript()),
           mode: 0o755,
@@ -482,9 +497,7 @@ export async function runQaIntegration(input: QaRunInput) {
     const qaAuthoring = await runQaAuthoring(
       sandbox,
       modelId,
-      input.project,
       input.cards,
-      input.context,
     )
     await assertCommand(qaAuthoring, "Writing integration tests")
     const qaSummary = "stdout" in qaAuthoring
@@ -581,6 +594,26 @@ export async function runQaIntegration(input: QaRunInput) {
           }),
         ),
         "Pushing QA changes",
+      )
+
+      await sandboxStep("Merging QA changes into main", () =>
+        mergeProjectBranchIntoMain({
+          repoUrl: input.project.repoUrl,
+          branchName: qaBranchName,
+          baseBranch: "main",
+          title:
+            input.cards.length === 1
+              ? `Add integration tests for ${input.cards[0].cardKey}`
+              : `Add integration tests for ${input.cards.length} tasks`,
+          body: [
+            "QA completed integration coverage for:",
+            ...input.cards.map((card) => `- ${card.cardKey}: ${card.title}`),
+          ].join("\n"),
+          commitMessage:
+            input.cards.length === 1
+              ? `Merge QA tests for ${input.cards[0].cardKey}`
+              : `Merge QA tests for ${input.cards.length} tasks`,
+        }),
       )
     }
 
