@@ -691,7 +691,7 @@ export function ProjectBoard({
           </div>
 
           <form onSubmit={handleSprintSubmit} className="border-t border-border p-3">
-            <div className="flex items-end gap-2 rounded-xl border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
+            <div className="flex items-end gap-2 rounded-lg border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -718,13 +718,8 @@ export function ProjectBoard({
                 {chatBusy ? "..." : "Send"}
               </Button>
             </div>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-              {chatMode ? (
-                <>
-                  <span>⌘↵ to send · saved to this project</span>
-                  <span>Squad thread</span>
-                </>
-              ) : (
+            {!chatMode ? (
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                 <>
                   <div className="flex gap-3">
                     <button type="button" className="transition-colors hover:text-foreground">＠ mention</button>
@@ -743,8 +738,8 @@ export function ProjectBoard({
                     <span>⌘↵ to send · shared with Squad chat</span>
                   )}
                 </>
-              )}
-            </div>
+              </div>
+            ) : null}
           </form>
         </aside>
       </main>

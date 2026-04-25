@@ -20,6 +20,22 @@ const OPENCODE_CHUNK_TIMEOUT_MS = 45 * 60 * 1000
 const INTEGRATION_SCRIPT_PATH = "/tmp/codapac-run-integration.sh"
 const SANDBOX_TIMEOUT_MS = 45 * 60 * 1000
 const WORKDIR = "/vercel/sandbox"
+const APPROVED_QA_TEST_PACKAGES = [
+  "vitest",
+  "jsdom",
+  "@testing-library/react",
+  "@testing-library/jest-dom",
+  "@testing-library/user-event",
+] as const
+const DISALLOWED_QA_TEST_PACKAGES = [
+  "jest-dom",
+  "@testing-library/react-hooks",
+  "enzyme",
+  "enzyme-adapter-react-16",
+  "enzyme-adapter-react-17",
+  "@wojtekmaj/enzyme-adapter-react-17",
+  "react-test-renderer",
+] as const
 
 type QaProject = {
   name: string
@@ -166,6 +182,8 @@ function buildQaPrompt(
     DEFAULT_APP_STACK_GUIDANCE,
     "Use Bun tooling by default when the repository does not clearly require another package manager.",
     "Ensure the repository has a runnable integration test command named test:integration.",
+    `If needed, use only these QA test packages: ${APPROVED_QA_TEST_PACKAGES.join(", ")}.`,
+    `Do not add deprecated or legacy QA packages such as ${DISALLOWED_QA_TEST_PACKAGES.join(", ")}.`,
     "If needed, add or update Vitest config, jsdom setup, and testing-library dependencies to support the integration tests.",
     "Keep the QA change focused on test coverage and the minimal supporting test configuration required to run it.",
     "Do not commit or push. The host application will handle git after you finish.",
@@ -443,6 +461,53 @@ async function detectProjectRoot(sandbox: Sandbox) {
   return output
 }
 
+async function assertSupportedQaPackages(
+  sandbox: Sandbox,
+  projectRoot: string,
+) {
+  const command = await sandboxStep("Checking QA test dependencies", () =>
+    sandbox.runCommand({
+      cmd: "bash",
+      args: [
+        "-lc",
+        [
+          "set -euo pipefail",
+          'PROJECT_ROOT="${PROJECT_ROOT:?}"',
+          'node - "$PROJECT_ROOT" <<\'NODE\'',
+          'const fs = require("node:fs")',
+          'const path = require("node:path")',
+          "const projectRoot = process.argv[2]",
+          'const packageJsonPath = path.join(projectRoot, "package.json")',
+          "const approved = new Set(" +
+            JSON.stringify([...APPROVED_QA_TEST_PACKAGES]) +
+            ")",
+          "const disallowed = new Set(" +
+            JSON.stringify([...DISALLOWED_QA_TEST_PACKAGES]) +
+            ")",
+          "const raw = fs.readFileSync(packageJsonPath, 'utf8')",
+          "const pkg = JSON.parse(raw)",
+          "const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }",
+          "const foundDisallowed = Object.keys(deps).filter((name) => disallowed.has(name))",
+          "if (foundDisallowed.length > 0) {",
+          '  console.error(`Deprecated QA packages are not allowed: ${foundDisallowed.join(", ")}`)',
+          "  process.exit(42)",
+          "}",
+          "const foundApproved = Object.keys(deps).filter((name) => approved.has(name))",
+          "process.stdout.write(foundApproved.join(','))",
+          "NODE",
+        ].join("\n"),
+      ],
+      cwd: WORKDIR,
+      env: {
+        PROJECT_ROOT: projectRoot,
+      },
+    }),
+  )
+
+  await assertCommand(command, "Checking QA test dependencies")
+  return "stdout" in command ? (await safeCommandOutput(command, "stdout")).trim() : ""
+}
+
 export async function runQaIntegration(input: QaRunInput) {
   const githubToken = getGitHubToken()
   const vercelToken = getVercelToken()
@@ -670,6 +735,7 @@ export async function runQaIntegration(input: QaRunInput) {
     )
 
     const projectRoot = await detectProjectRoot(activeSandbox)
+    await assertSupportedQaPackages(activeSandbox, projectRoot)
     const integration = await sandboxStep("Running integration tests", () =>
       activeSandbox.runCommand({
         cmd: "bash",
