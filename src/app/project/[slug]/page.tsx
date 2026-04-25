@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { Route } from "next"
 import Link from "next/link"
@@ -151,6 +151,52 @@ export default function ProjectDetailPage() {
   const [deploymentNotice, setDeploymentNotice] =
     useState<DeploymentNoticeState | null>(null)
   const deploymentUrlRef = useRef<string | null | undefined>(undefined)
+  const runProjectLoop = useCallback(async (
+    trigger:
+      | "chat_continue"
+      | "manual_start"
+      | "manual_advance"
+      | "programmer_finished"
+      | "qa_finished"
+      | "qa_failed",
+    preferredCardKeys?: string | string[],
+    maxSteps = 1,
+  ) => {
+    if (!project) {
+      throw new Error("Project is not ready yet.")
+    }
+
+    const keys = preferredCardKeys
+      ? Array.isArray(preferredCardKeys)
+        ? preferredCardKeys
+        : [preferredCardKeys]
+      : undefined
+    const response = await fetch("/api/project/orchestrate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: project.id,
+        trigger,
+        preferredCardKeys: keys,
+        maxSteps,
+      }),
+    })
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null
+      throw new Error(payload?.error || "Failed to run project workflow.")
+    }
+
+    return (await response.json().catch(() => null)) as
+      | {
+          status?: string
+        }
+      | null
+  }, [project])
 
   useEffect(() => {
     if (!project || project.planning.status !== "queued") {
@@ -258,74 +304,6 @@ export default function ProjectDetailPage() {
         ]
       : chatMessages
 
-  const launchQaForCard = async (cardKey: string, recoveryDepth = 0) => {
-    const response = await fetch("/api/qa/launch", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        projectId: project.id,
-        cardKey,
-        recoveryDepth,
-      }),
-    })
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as
-        | { error?: string }
-        | null
-      throw new Error(payload?.error || "Failed to start QA.")
-    }
-
-    const payload = (await response.json().catch(() => null)) as
-      | {
-          status?: string
-          cardKey?: string
-        }
-      | null
-
-    if (
-      payload?.status === "reassigned_to_programmer" &&
-      recoveryDepth < 2
-    ) {
-      await launchProgrammerThenQa(payload.cardKey ?? cardKey, recoveryDepth + 1)
-      return
-    }
-
-    if (payload?.status === "qa_retry_needed" && recoveryDepth < 1) {
-      await launchQaForCard(cardKey, recoveryDepth + 1)
-    }
-  }
-
-  const launchProgrammerThenQa = async (
-    cardKeys: string | string[],
-    recoveryDepth = 0,
-  ) => {
-    const keys = Array.isArray(cardKeys) ? cardKeys : [cardKeys]
-    const response = await fetch("/api/programmer/launch", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        projectId: project.id,
-        cardKeys: keys,
-      }),
-    })
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as
-        | { error?: string }
-        | null
-      throw new Error(payload?.error || "Failed to start Programmer.")
-    }
-
-    for (const key of keys) {
-      await launchQaForCard(key, recoveryDepth)
-    }
-  }
-
   return (
     <div className="min-h-dvh bg-background">
       <div className="sticky top-0 z-20">
@@ -352,12 +330,12 @@ export default function ProjectDetailPage() {
           try {
             const card = board.cards.find((item) => item.id === cardKey)
             if (card?.tone === "todo") {
-              await launchProgrammerThenQa(cardKey)
+              await runProjectLoop("manual_advance", cardKey, 1)
               return
             }
 
             if (card?.tone === "done") {
-              await launchQaForCard(cardKey)
+              await runProjectLoop("manual_advance", cardKey, 1)
               return
             }
 
@@ -410,12 +388,15 @@ export default function ProjectDetailPage() {
             }
 
             const responseAuthor = response.headers.get("x-codapac-chat-author")
+            const workflowTrigger = response.headers.get(
+              "x-codapac-workflow-trigger",
+            )
             setStreamingAuthor(
               responseAuthor === "PROGRAMMER" || responseAuthor === "QA"
                 ? responseAuthor
                 : "BOSS",
             )
-            const launchCardKeys = (
+            const programmerCardKeys = (
               response.headers.get("x-codapac-launch-card-keys") ?? ""
             )
               .split(",")
@@ -427,39 +408,17 @@ export default function ProjectDetailPage() {
               .split(",")
               .map((cardKey) => cardKey.trim())
               .filter(Boolean)
-            const rawLaunchGroups = response.headers.get(
-              "x-codapac-launch-card-groups",
+            const preferredCardKeys = Array.from(
+              new Set([...programmerCardKeys, ...qaCardKeys]),
             )
-            const launchGroups = rawLaunchGroups
-              ? (JSON.parse(decodeURIComponent(rawLaunchGroups)) as unknown)
-              : null
-            const groupedCardKeys =
-              Array.isArray(launchGroups) &&
-              launchGroups.every(
-                (group) =>
-                  Array.isArray(group) &&
-                  group.every((cardKey) => typeof cardKey === "string"),
-              )
-                ? (launchGroups as string[][])
-                : launchCardKeys.map((cardKey) => [cardKey])
 
-            if (groupedCardKeys.length > 0) {
-              void (async () => {
-                for (const launchGroup of groupedCardKeys) {
-                  await launchProgrammerThenQa(launchGroup)
-                }
-              })().catch((error: unknown) => {
-                setErrorDialog(toFriendlyError(error, "Builder unavailable"))
-              })
-            }
-
-            if (qaCardKeys.length > 0) {
-              void (async () => {
-                for (const qaCardKey of qaCardKeys) {
-                  await launchQaForCard(qaCardKey)
-                }
-              })().catch((error: unknown) => {
-                setErrorDialog(toFriendlyError(error, "Testing unavailable"))
+            if (workflowTrigger === "chat_continue" || preferredCardKeys.length > 0) {
+              void runProjectLoop(
+                "chat_continue",
+                preferredCardKeys.length > 0 ? preferredCardKeys : undefined,
+                6,
+              ).catch((error: unknown) => {
+                setErrorDialog(toFriendlyError(error, "Workflow unavailable"))
               })
             }
 

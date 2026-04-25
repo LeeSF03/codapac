@@ -1,12 +1,18 @@
 "server-only"
 
 import { Sandbox } from "@vercel/sandbox"
+import type { Command, CommandFinished } from "@vercel/sandbox"
 
+import { DEFAULT_APP_STACK_GUIDANCE } from "@/lib/agents/default-stack"
+import type { ExecutionFeatureContext } from "@/lib/agents/execution-context"
 import { getGitHubToken, mergeProjectBranchIntoMain } from "@/lib/boss/github"
-import { getKimiModel, getKimiToken } from "@/lib/boss/kimi"
+import { getGlmModel, getGlmToken } from "@/lib/boss/glm"
 
 const OPENCODE_BIN = "/home/vercel-sandbox/.opencode/bin/opencode"
 const OPENCODE_CONFIG_PATH = "/tmp/codapac-opencode.json"
+const OPENCODE_TASK_PATH = "/tmp/codapac-programmer-task.md"
+const OPENCODE_MAX_ATTEMPTS = 3
+const OPENCODE_CHUNK_TIMEOUT_MS = 45 * 60 * 1000
 const SANDBOX_TIMEOUT_MS = 45 * 60 * 1000
 const WORKDIR = "/vercel/sandbox"
 
@@ -34,11 +40,24 @@ type ProgrammerRunInput = {
   externalRunId: string
   project: ProgrammerProject
   cards: ProgrammerCard[]
+  context?: ExecutionFeatureContext
+  reuseSandboxId?: string | null
+  reuseBranchName?: string | null
   onStarted?: (details: {
     sandboxId: string
     commandId: string | null
     branchName: string
   }) => Promise<void>
+}
+
+function isRetryableOpencodeTermination(message: string) {
+  return /\b(terminated|stream ended|stream_ended_early|connection closed|command failed to finish)\b/i.test(
+    message,
+  )
+}
+
+function isRetryableNoChanges(message: string) {
+  return /without creating any file changes/i.test(message)
 }
 
 function safeBranchSegment(value: string) {
@@ -85,12 +104,12 @@ function publicBranchUrl(repoUrl: string, branchName: string) {
   return `${cleanRepoUrl}/tree/${encodeURIComponent(branchName)}`
 }
 
-function opencodeModelId(providerId: string, kimiModel: string) {
-  return `${providerId}/${kimiModel}`
+function opencodeModelId(providerId: string, glmModel: string) {
+  return `${providerId}/${glmModel}`
 }
 
-function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
-  const providerId = "moonshot"
+function buildOpencodeConfig(glmToken: string, glmModel: string) {
+  const providerId = "glm"
 
   return JSON.stringify(
     {
@@ -99,19 +118,21 @@ function buildOpencodeConfig(kimiToken: string, kimiModel: string) {
       provider: {
         [providerId]: {
           npm: "@ai-sdk/openai-compatible",
-          name: "Moonshot AI",
+          name: "GLM",
           options: {
-            apiKey: kimiToken,
-            baseURL: "https://api.moonshot.ai/v1",
+            apiKey: glmToken,
+            baseURL: process.env.GLM_BASE_URL?.trim() || "https://api.ilmu.ai/v1",
+            timeout: false,
+            chunkTimeout: OPENCODE_CHUNK_TIMEOUT_MS,
           },
           models: {
-            [kimiModel]: {
-              name: `Kimi ${kimiModel}`,
+            [glmModel]: {
+              name: `GLM ${glmModel}`,
             },
           },
         },
       },
-      model: opencodeModelId(providerId, kimiModel),
+      model: opencodeModelId(providerId, glmModel),
     },
     null,
     2,
@@ -140,18 +161,35 @@ function formatTaskForPrompt(card: ProgrammerCard, index: number) {
     .join("\n")
 }
 
-function buildPrompt(project: ProgrammerProject, cards: ProgrammerCard[]) {
+function buildPrompt(
+  project: ProgrammerProject,
+  cards: ProgrammerCard[],
+  context?: ExecutionFeatureContext,
+) {
   return [
     "You are the programmer agent for this repository.",
     cards.length === 1
       ? "Implement exactly one task. Do not ask follow-up questions."
       : "Implement the grouped tasks together in one cohesive change. Do not ask follow-up questions.",
     "Keep the change focused, practical, and complete enough for review.",
+    "You must modify tracked repository files for this task. Do not stop after only analyzing, planning, or describing the work.",
+    "If the requested work already appears to exist, verify that in the codebase and then make the smallest necessary implementation or test change so this run still leaves a meaningful diff for review.",
+    "Do not exit until you have either changed tracked project files or hit a concrete repository-level blocker that you describe explicitly in your final summary.",
+    DEFAULT_APP_STACK_GUIDANCE,
     "Run relevant checks if the repository makes them obvious.",
     "Do not commit or push. The host application will handle git after you finish.",
     "",
     `Project: ${project.name}`,
     `Project goal: ${project.description || "(none provided)"}`,
+    "",
+    "Feature brief:",
+    context?.featureSummary || project.description || "(none provided)",
+    context?.recentConversationSummary
+      ? ["", "Recent conversation summary:", context.recentConversationSummary].join("\n")
+      : "",
+    context?.groupedTaskRationale
+      ? ["", "Grouped-task rationale:", context.groupedTaskRationale].join("\n")
+      : "",
     "",
     "Tasks to implement:",
     cards.map(formatTaskForPrompt).join("\n\n"),
@@ -193,8 +231,7 @@ async function safeCommandOutput(
 function redactSensitiveOutput(value: string) {
   const secrets = [
     process.env.GITHUB_TOKEN,
-    process.env.KIMI_TOKEN,
-    process.env.MOONSHOT_API_KEY,
+    process.env.GLM_TOKEN,
     process.env.VERCEL_TOKEN,
   ]
     .map((secret) => secret?.trim())
@@ -231,53 +268,172 @@ async function sandboxStep<T>(label: string, operation: () => Promise<T>) {
   }
 }
 
+async function streamCommandLogs(command: Command, prefix: string) {
+  for await (const log of command.logs()) {
+    const line = `${prefix} ${log.data}`
+    if (log.stream === "stdout") {
+      console.log(line)
+    } else {
+      console.error(line)
+    }
+  }
+}
+
+async function runLoggedCommand(params: {
+  sandbox: Sandbox
+  label: string
+  prefix: string
+  cmd: string
+  args: string[]
+  cwd?: string
+  env?: Record<string, string>
+}) {
+  const command = await sandboxStep(params.label, () =>
+    params.sandbox.runCommand({
+      cmd: params.cmd,
+      args: params.args,
+      cwd: params.cwd,
+      env: params.env,
+      detached: true,
+    }),
+  )
+
+  const logTask = streamCommandLogs(command, params.prefix)
+  let finished: CommandFinished
+  try {
+    finished = await command.wait()
+  } finally {
+    await logTask.catch((error) => {
+      console.error(`${params.prefix} [log-stream-error] ${describeSandboxError(error)}`)
+    })
+  }
+
+  return {
+    command,
+    finished,
+  }
+}
+
+async function collectGitStatusSummary(sandbox: Sandbox) {
+  const [statusCommand, diffStatCommand] = await Promise.all([
+    sandboxStep("Checking git status", () =>
+      sandbox.runCommand({
+        cmd: "git",
+        args: ["status", "--short"],
+        cwd: WORKDIR,
+      }),
+    ),
+    sandboxStep("Checking git diff stat", () =>
+      sandbox.runCommand({
+        cmd: "git",
+        args: ["diff", "--stat"],
+        cwd: WORKDIR,
+      }),
+    ),
+  ])
+
+  await assertCommand(statusCommand, "Checking git status")
+  await assertCommand(diffStatCommand, "Checking git diff stat")
+
+  const status =
+    "stdout" in statusCommand
+      ? redactSensitiveOutput(await safeCommandOutput(statusCommand, "stdout")).trim()
+      : ""
+  const diffStat =
+    "stdout" in diffStatCommand
+      ? redactSensitiveOutput(await safeCommandOutput(diffStatCommand, "stdout")).trim()
+      : ""
+
+  return { status, diffStat }
+}
+
 export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
   const githubToken = getGitHubToken()
-  const kimiToken = getKimiToken()
-  const kimiModel = getKimiModel()
-  const modelId = opencodeModelId("moonshot", kimiModel)
+  const glmToken = getGlmToken()
+  const glmModel = getGlmModel()
+  const modelId = opencodeModelId("glm", glmModel)
   const cards = input.cards
   if (cards.length === 0) {
     throw new Error("Programmer needs at least one task to run.")
   }
 
-  const branchName = buildBranchName(cards, input.externalRunId)
+  const branchName =
+    input.reuseBranchName?.trim() || buildBranchName(cards, input.externalRunId)
   const authRepoUrl = authenticatedRepoUrl(input.project.repoUrl, githubToken)
   const sourceRepoUrl = gitSourceUrl(input.project.repoUrl)
-
-  const sandbox = await sandboxStep("Creating the Vercel Sandbox", () =>
-    Sandbox.create({
-      token: input.project.vercelToken,
-      teamId: input.project.vercelTeamId,
-      projectId: input.project.vercelProjectId,
-      runtime: "node22",
-      source: {
-        type: "git",
-        url: sourceRepoUrl,
-        username: "x-access-token",
-        password: githubToken,
-        depth: 1,
-      },
-      timeout: SANDBOX_TIMEOUT_MS,
-      resources: { vcpus: 2 },
-    }),
-  )
+  let sandbox: Sandbox | null = null
+  let stopSandboxOnExit = true
+  let reusedSandbox = false
 
   try {
-    await assertCommand(
-      await sandboxStep("Creating the task branch", () =>
-        sandbox.runCommand({
-          cmd: "git",
-          args: ["checkout", "-B", branchName],
-          cwd: WORKDIR,
+    if (input.reuseSandboxId?.trim()) {
+      try {
+        sandbox = await sandboxStep("Reopening the Vercel Sandbox", () =>
+          Sandbox.get({
+            sandboxId: input.reuseSandboxId!.trim(),
+            token: input.project.vercelToken,
+            teamId: input.project.vercelTeamId,
+          }),
+        )
+        reusedSandbox = true
+        console.log(
+          `[FIXER:${cards.map((card) => card.cardKey).join(",")}] reusing sandbox ${input.reuseSandboxId}`,
+        )
+      } catch (error) {
+        console.error(
+          `[FIXER:${cards.map((card) => card.cardKey).join(",")}] unable to reopen sandbox ${input.reuseSandboxId}: ${describeSandboxError(error)}`,
+        )
+        sandbox = null
+      }
+    }
+
+    if (!sandbox) {
+      sandbox = await sandboxStep("Creating the Vercel Sandbox", () =>
+        Sandbox.create({
+          token: input.project.vercelToken,
+          teamId: input.project.vercelTeamId,
+          projectId: input.project.vercelProjectId,
+          runtime: "node22",
+          source: {
+            type: "git",
+            url: sourceRepoUrl,
+            username: "x-access-token",
+            password: githubToken,
+            depth: 1,
+          },
+          timeout: SANDBOX_TIMEOUT_MS,
+          resources: { vcpus: 2 },
         }),
+      )
+      console.log(
+        `[FIXER:${cards.map((card) => card.cardKey).join(",")}] created new sandbox ${sandbox.sandboxId}`,
+      )
+    }
+
+    const activeSandbox = sandbox
+
+    await assertCommand(
+      await sandboxStep(
+        reusedSandbox ? "Opening the task branch" : "Creating the task branch",
+        () =>
+          activeSandbox.runCommand({
+            cmd: "bash",
+            args: [
+              "-lc",
+              'git checkout "$BRANCH_NAME" || git checkout -B "$BRANCH_NAME"',
+            ],
+            cwd: WORKDIR,
+            env: {
+              BRANCH_NAME: branchName,
+            },
+          }),
       ),
-      "Creating the task branch",
+      reusedSandbox ? "Opening the task branch" : "Creating the task branch",
     )
 
     await assertCommand(
       await sandboxStep("Installing OpenCode", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "bash",
           args: ["-lc", "curl -fsSL https://opencode.ai/install | bash"],
           env: {
@@ -290,7 +446,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
 
     await assertCommand(
       await sandboxStep("Preparing OpenCode config directory", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "mkdir",
           args: ["-p", "/tmp"],
         }),
@@ -299,65 +455,123 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
 
     await sandboxStep("Writing OpenCode config", () =>
-      sandbox.writeFiles([
+      activeSandbox.writeFiles([
         {
           path: OPENCODE_CONFIG_PATH,
-          content: Buffer.from(buildOpencodeConfig(kimiToken, kimiModel)),
+          content: Buffer.from(buildOpencodeConfig(glmToken, glmModel)),
+        },
+        {
+          path: OPENCODE_TASK_PATH,
+          content: Buffer.from(buildPrompt(input.project, cards, input.context)),
         },
       ]),
     )
 
-    await input.onStarted?.({
-      sandboxId: sandbox.sandboxId,
-      commandId: null,
-      branchName,
-    })
+    let opencodeOutput = ""
+    let changedFiles = ""
+    let lastStatusSummary = ""
+    let lastDiffStat = ""
+    let opencodeAttempt = 0
 
-    const run = await sandboxStep("Running OpenCode", () =>
-      sandbox.runCommand({
-        cmd: OPENCODE_BIN,
-        args: [
-          "run",
-          "--model",
-          modelId,
-          "--format",
-          "json",
-          "--title",
-          cards.length === 1
-            ? `${cards[0].cardKey} programmer task`
-            : `${cards.length} grouped programmer tasks`,
-          "--dangerously-skip-permissions",
-          buildPrompt(input.project, cards),
-        ],
-        cwd: WORKDIR,
-        env: {
-          OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-        },
-      }),
-    )
-    await assertCommand(run, "Running OpenCode")
-    const opencodeOutput = "stdout" in run
-      ? (await safeCommandOutput(run, "stdout")).trim()
-      : ""
+    while (opencodeAttempt < OPENCODE_MAX_ATTEMPTS) {
+      opencodeAttempt += 1
 
-    const status = await sandboxStep("Checking repository changes", () =>
-      sandbox.runCommand({
-        cmd: "git",
-        args: ["status", "--short"],
-        cwd: WORKDIR,
-      }),
-    )
-    await assertCommand(status, "Checking repository changes")
-    const changedFiles = "stdout" in status
-      ? (await safeCommandOutput(status, "stdout")).trim()
-      : ""
+      try {
+        const run = await runLoggedCommand({
+          sandbox: activeSandbox,
+          label:
+            opencodeAttempt === 1
+              ? "Running OpenCode"
+              : `Continuing OpenCode (attempt ${opencodeAttempt})`,
+          prefix: `[FIXER:${cards.map((card) => card.cardKey).join(",")}:attempt-${opencodeAttempt}]`,
+          cmd: OPENCODE_BIN,
+          args: [
+            "run",
+            "--model",
+            modelId,
+            "--print-logs",
+            "--file",
+            OPENCODE_TASK_PATH,
+            "--format",
+            "default",
+            "--title",
+            cards.length === 1
+              ? `${cards[0].cardKey} programmer task`
+              : `${cards.length} grouped programmer tasks`,
+            "--dangerously-skip-permissions",
+            opencodeAttempt === 1
+              ? "Read the attached task brief, implement the requested work in this repository, modify the necessary tracked files now, run any obvious checks, and then summarize exactly what changed."
+              : "Continue implementing from the current repository state and any partial changes already present. You must leave tracked repository file changes behind before exiting unless there is a concrete blocker. Finish the requested work, run any obvious checks, and then summarize exactly what changed.",
+          ],
+          cwd: WORKDIR,
+          env: {
+            OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+          },
+        })
+        await input.onStarted?.({
+          sandboxId: sandbox.sandboxId,
+          commandId: run.command.cmdId,
+          branchName,
+        })
+        await assertCommand(run.finished, "Running OpenCode")
+        opencodeOutput = await run.finished.stdout()
+          .then((output) => output.trim())
+          .catch((error) => describeSandboxError(error))
+
+        const gitSummary = await collectGitStatusSummary(activeSandbox)
+        changedFiles = gitSummary.status
+        lastStatusSummary = gitSummary.status
+        lastDiffStat = gitSummary.diffStat
+        if (changedFiles) {
+          break
+        }
+
+        if (opencodeAttempt < OPENCODE_MAX_ATTEMPTS) {
+          continue
+        }
+
+        throw new Error(
+          [
+            "Programmer finished without creating any file changes.",
+            opencodeOutput ? `Last OpenCode output:\n${opencodeOutput.slice(-1_200)}` : "",
+            lastStatusSummary
+              ? `Last git status:\n${lastStatusSummary}`
+              : "Last git status: (clean working tree)",
+            lastDiffStat ? `Last git diff stat:\n${lastDiffStat}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        )
+      } catch (error) {
+        const message = describeSandboxError(error)
+        if (
+          opencodeAttempt < OPENCODE_MAX_ATTEMPTS &&
+          (isRetryableOpencodeTermination(message) || isRetryableNoChanges(message))
+        ) {
+          continue
+        }
+
+        throw error
+      }
+    }
     if (!changedFiles) {
-      throw new Error("Programmer finished without creating any file changes.")
+      throw new Error(
+        [
+          "Programmer finished without creating any file changes.",
+          opencodeOutput ? `Last OpenCode output:\n${opencodeOutput.slice(-1_200)}` : "",
+          lastStatusSummary
+            ? `Last git status:\n${lastStatusSummary}`
+            : "Last git status: (clean working tree)",
+          lastDiffStat ? `Last git diff stat:\n${lastDiffStat}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      )
     }
 
     await assertCommand(
       await sandboxStep("Configuring git user name", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["config", "user.name", "Codapac Programmer"],
           cwd: WORKDIR,
@@ -367,7 +581,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
     await assertCommand(
       await sandboxStep("Configuring git user email", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["config", "user.email", "codapac-programmer@users.noreply.github.com"],
           cwd: WORKDIR,
@@ -377,7 +591,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
     await assertCommand(
       await sandboxStep("Preparing repository push access", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["remote", "set-url", "origin", authRepoUrl],
           cwd: WORKDIR,
@@ -387,7 +601,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
     await assertCommand(
       await sandboxStep("Staging programmer changes", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["add", "-A"],
           cwd: WORKDIR,
@@ -397,7 +611,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
     await assertCommand(
       await sandboxStep("Committing programmer changes", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: [
             "commit",
@@ -413,7 +627,7 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
     )
     await assertCommand(
       await sandboxStep("Pushing programmer changes", () =>
-        sandbox.runCommand({
+        activeSandbox.runCommand({
           cmd: "git",
           args: ["push", "-u", "origin", branchName],
           cwd: WORKDIR,
@@ -449,7 +663,19 @@ export async function runProgrammerWithOpencode(input: ProgrammerRunInput) {
         opencodeOutput.slice(-2_000) ||
         "Programmer finished the task and merged it into main.",
     }
+  } catch (error) {
+    const message = describeSandboxError(error)
+    if (sandbox && isRetryableOpencodeTermination(message)) {
+      stopSandboxOnExit = false
+      throw new Error(
+        `OpenCode terminated before finishing. The workspace was kept alive in sandbox ${sandbox.sandboxId} so the task can continue from the same files on retry.`,
+      )
+    }
+
+    throw error
   } finally {
-    await sandbox.stop({ blocking: true }).catch(() => null)
+    if (sandbox && stopSandboxOnExit) {
+      await sandbox.stop({ blocking: true }).catch(() => null)
+    }
   }
 }

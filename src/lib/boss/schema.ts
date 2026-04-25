@@ -8,7 +8,7 @@ const bossTodoSchema = z.object({
   acceptanceCriteria: z.array(z.string().trim().min(1).max(240)).max(8),
   labels: z.array(z.string().trim().min(1).max(32)).max(6),
   priority: z.enum(["low", "medium", "high"]),
-  agent: z.enum(["PM", "ENG", "QA"]),
+  agent: z.enum(["ENG", "QA"]),
 })
 
 export const bossPlanSchema = z.object({

@@ -39,6 +39,14 @@ type BoardTone = "todo" | "progress" | "done" | "merged"
 
 const toneOrder: BoardTone[] = ["todo", "progress", "done", "merged"]
 
+function normalizeExecutionAgent(agent: ProjectRole | null | undefined): ProjectRole {
+  if (agent === "QA") {
+    return "QA"
+  }
+
+  return "ENG"
+}
+
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -76,6 +84,75 @@ function formatTimeLabel(timestamp: number): string {
   const hh = String(date.getHours()).padStart(2, "0")
   const mm = String(date.getMinutes()).padStart(2, "0")
   return `${hh}:${mm}`
+}
+
+function summarizeFailureMessage(error: string | null | undefined) {
+  const message = (error ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (!message) {
+    return null
+  }
+
+  return message.slice(0, 220)
+}
+
+function latestCardFailure(
+  programmerFailure: Doc<"projectProgrammerJobs"> | undefined,
+  qaFailure: Doc<"projectQaJobs"> | undefined,
+  latestProgrammerJob: Doc<"projectProgrammerJobs"> | undefined,
+  latestQaJob: Doc<"projectQaJobs"> | undefined,
+  tone: BoardTone,
+): {
+  stage: "programmer" | "qa"
+  error: string
+  updatedAt: number
+} | null {
+  const programmerSummary = programmerFailure
+    ? {
+        stage: "programmer" as const,
+        error: summarizeFailureMessage(programmerFailure.error),
+        updatedAt: programmerFailure.updatedAt,
+      }
+    : null
+  const qaSummary = qaFailure
+    ? {
+        stage: "qa" as const,
+        error: summarizeFailureMessage(qaFailure.error),
+        updatedAt: qaFailure.updatedAt,
+      }
+    : null
+
+  const latestFailure =
+    !programmerSummary
+      ? qaSummary
+      : !qaSummary
+        ? programmerSummary
+        : programmerSummary.updatedAt >= qaSummary.updatedAt
+          ? programmerSummary
+          : qaSummary
+
+  const latestSuccessfulOrActiveUpdate = Math.max(
+    latestProgrammerJob && latestProgrammerJob.status !== "failed"
+      ? latestProgrammerJob.updatedAt
+      : -1,
+    latestQaJob && latestQaJob.status !== "failed" ? latestQaJob.updatedAt : -1,
+  )
+
+  if (
+    !latestFailure?.error ||
+    tone === "merged" ||
+    latestSuccessfulOrActiveUpdate > latestFailure.updatedAt
+  ) {
+    return null
+  }
+
+  return {
+    stage: latestFailure.stage,
+    error: latestFailure.error,
+    updatedAt: latestFailure.updatedAt,
+  }
 }
 
 function projectPrefix(slug: string): string {
@@ -122,6 +199,9 @@ function serializeProject(
   project: Doc<"projects">,
   latestPreviewDeploymentUrl?: string | null,
 ) {
+  const stablePreviewDeploymentUrl =
+    project.latestPreviewDeploymentUrl ?? latestPreviewDeploymentUrl ?? undefined
+
   return {
     id: project._id,
     name: project.name,
@@ -133,7 +213,7 @@ function serializeProject(
     status: project.status,
     repoUrl: project.repoUrl ?? undefined,
     vercelProjectId: project.vercelProjectId ?? undefined,
-    latestPreviewDeploymentUrl: latestPreviewDeploymentUrl ?? undefined,
+    latestPreviewDeploymentUrl: stablePreviewDeploymentUrl,
     createdAt: project._creationTime,
     updatedAt: project.updatedAt,
     starred: project.starred,
@@ -380,6 +460,29 @@ export const getBoard = query({
     ])
 
     const cardByKey = new Map(cards.map((card) => [card.cardKey, card]))
+    const latestProgrammerFailureByCard = new Map<string, Doc<"projectProgrammerJobs">>()
+    const latestProgrammerJobByCard = new Map<string, Doc<"projectProgrammerJobs">>()
+    for (const job of programmerJobs) {
+      if (!latestProgrammerJobByCard.has(job.cardKey)) {
+        latestProgrammerJobByCard.set(job.cardKey, job)
+      }
+      if (job.status !== "failed" || latestProgrammerFailureByCard.has(job.cardKey)) {
+        continue
+      }
+      latestProgrammerFailureByCard.set(job.cardKey, job)
+    }
+
+    const latestQaFailureByCard = new Map<string, Doc<"projectQaJobs">>()
+    const latestQaJobByCard = new Map<string, Doc<"projectQaJobs">>()
+    for (const job of qaJobs) {
+      if (!latestQaJobByCard.has(job.cardKey)) {
+        latestQaJobByCard.set(job.cardKey, job)
+      }
+      if (job.status !== "failed" || latestQaFailureByCard.has(job.cardKey)) {
+        continue
+      }
+      latestQaFailureByCard.set(job.cardKey, job)
+    }
     const activeRuns = [
       ...programmerJobs
         .filter((job) => job.status === "running")
@@ -413,6 +516,13 @@ export const getBoard = query({
 
     return {
       cards: cards.map((card) => ({
+        latestFailure: latestCardFailure(
+          latestProgrammerFailureByCard.get(card.cardKey),
+          latestQaFailureByCard.get(card.cardKey),
+          latestProgrammerJobByCard.get(card.cardKey),
+          latestQaJobByCard.get(card.cardKey),
+          card.tone,
+        ),
         id: card.cardKey,
         title: card.title,
         issueNumber: card.issueNumber,
@@ -434,6 +544,288 @@ export const getBoard = query({
         })),
       activeRuns,
       typing: null,
+    }
+  },
+})
+
+export const getNextWork = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+
+    const cards = await ctx.db
+      .query("projectCards")
+      .withIndex("by_projectId_and_updatedAt", (q) =>
+        q.eq("projectId", project._id),
+      )
+      .order("desc")
+      .take(200)
+
+    const sortedCards = cards
+      .slice()
+      .sort((left, right) => left.issueNumber - right.issueNumber)
+
+    const toCardSummary = (card: Doc<"projectCards">) => ({
+      cardKey: card.cardKey,
+      title: card.title,
+      issueNumber: card.issueNumber,
+      tone: card.tone,
+      agent: card.agent,
+      priority: card.priority,
+      tags: card.tags,
+      acceptanceCriteria: card.acceptanceCriteria,
+      updatedAt: card.updatedAt,
+    })
+
+    return {
+      programmer: sortedCards
+        .filter(
+          (card) =>
+            card.agent === "ENG" &&
+            (card.tone === "progress" || card.tone === "todo"),
+        )
+        .sort((left, right) => {
+          if (left.tone !== right.tone) {
+            return left.tone === "progress" ? -1 : 1
+          }
+          return left.issueNumber - right.issueNumber
+        })
+        .map(toCardSummary),
+      qaTodo: sortedCards
+        .filter(
+          (card) =>
+            card.agent === "QA" &&
+            (card.tone === "progress" || card.tone === "todo"),
+        )
+        .sort((left, right) => {
+          if (left.tone !== right.tone) {
+            return left.tone === "progress" ? -1 : 1
+          }
+          return left.issueNumber - right.issueNumber
+        })
+        .map(toCardSummary),
+      qaReview: sortedCards
+        .filter((card) => card.tone === "done")
+        .map(toCardSummary),
+    }
+  },
+})
+
+export const getActiveJobs = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+
+    const [programmerJobs, qaJobs] = await Promise.all([
+      ctx.db
+        .query("projectProgrammerJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .order("desc")
+        .take(50),
+      ctx.db
+        .query("projectQaJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .order("desc")
+        .take(50),
+    ])
+
+    return {
+      programmer: programmerJobs
+        .filter((job) => job.status === "running")
+        .map((job) => ({
+          jobId: job._id,
+          cardKey: job.cardKey,
+          status: job.status,
+          notes: job.notes,
+          updatedAt: job.updatedAt,
+        })),
+      qa: qaJobs
+        .filter((job) => job.status === "running")
+        .map((job) => ({
+          jobId: job._id,
+          cardKey: job.cardKey,
+          status: job.status,
+          notes: job.notes,
+          updatedAt: job.updatedAt,
+        })),
+    }
+  },
+})
+
+export const getFailedWork = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+
+    const [cards, programmerJobs, qaJobs] = await Promise.all([
+      ctx.db
+        .query("projectCards")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .order("desc")
+        .take(200),
+      ctx.db
+        .query("projectProgrammerJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .order("desc")
+        .take(50),
+      ctx.db
+        .query("projectQaJobs")
+        .withIndex("by_projectId_and_updatedAt", (q) =>
+          q.eq("projectId", project._id),
+        )
+        .order("desc")
+        .take(50),
+    ])
+
+    const latestProgrammerFailureByCard = new Map<string, Doc<"projectProgrammerJobs">>()
+    for (const job of programmerJobs) {
+      if (job.status !== "failed" || latestProgrammerFailureByCard.has(job.cardKey)) {
+        continue
+      }
+      latestProgrammerFailureByCard.set(job.cardKey, job)
+    }
+
+    const latestQaFailureByCard = new Map<string, Doc<"projectQaJobs">>()
+    for (const job of qaJobs) {
+      if (job.status !== "failed" || latestQaFailureByCard.has(job.cardKey)) {
+        continue
+      }
+      latestQaFailureByCard.set(job.cardKey, job)
+    }
+
+    return cards
+      .slice()
+      .sort((left, right) => left.issueNumber - right.issueNumber)
+      .map((card) => {
+        const programmerFailure = latestProgrammerFailureByCard.get(card.cardKey)
+        const qaFailure = latestQaFailureByCard.get(card.cardKey)
+        const latestFailure =
+          !programmerFailure
+            ? qaFailure
+              ? {
+                  stage: "qa" as const,
+                  error: qaFailure.error,
+                  updatedAt: qaFailure.updatedAt,
+                }
+              : null
+            : !qaFailure
+              ? {
+                  stage: "programmer" as const,
+                  error: programmerFailure.error,
+                  updatedAt: programmerFailure.updatedAt,
+                }
+              : programmerFailure.updatedAt >= qaFailure.updatedAt
+                ? {
+                    stage: "programmer" as const,
+                    error: programmerFailure.error,
+                    updatedAt: programmerFailure.updatedAt,
+                  }
+                : {
+                    stage: "qa" as const,
+                    error: qaFailure.error,
+                    updatedAt: qaFailure.updatedAt,
+                  }
+
+        if (!latestFailure) {
+          return null
+        }
+
+          return {
+            cardKey: card.cardKey,
+            title: card.title,
+            tone: card.tone,
+            agent: card.agent,
+            failedStage: latestFailure.stage,
+            error: latestFailure.error,
+            updatedAt: latestFailure.updatedAt,
+          }
+      })
+      .filter((item) => item !== null)
+  },
+})
+
+export const getCardState = query({
+  args: {
+    projectId: v.id("projects"),
+    cardKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const cardKey = args.cardKey.trim()
+    if (!cardKey) {
+      throw new Error("Card key is required.")
+    }
+
+    const card = await ctx.db
+      .query("projectCards")
+      .withIndex("by_projectId_and_cardKey", (q) =>
+        q.eq("projectId", project._id).eq("cardKey", cardKey),
+      )
+      .unique()
+
+    if (!card) {
+      return null
+    }
+
+    const [programmerJobs, qaJobs] = await Promise.all([
+      ctx.db
+        .query("projectProgrammerJobs")
+        .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+          q.eq("projectId", project._id).eq("cardKey", card.cardKey),
+        )
+        .order("desc")
+        .take(5),
+      ctx.db
+        .query("projectQaJobs")
+        .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+          q.eq("projectId", project._id).eq("cardKey", card.cardKey),
+        )
+        .order("desc")
+        .take(5),
+    ])
+
+    return {
+      card: {
+        cardKey: card.cardKey,
+        title: card.title,
+        description: card.description,
+        acceptanceCriteria: card.acceptanceCriteria,
+        issueNumber: card.issueNumber,
+        agent: card.agent,
+        priority: card.priority,
+        tags: card.tags,
+        tone: card.tone,
+        updatedAt: card.updatedAt,
+      },
+      programmerJobs: programmerJobs.map((job) => ({
+        jobId: job._id,
+        status: job.status,
+        branchName: job.branchName,
+        sandboxId: job.sandboxId,
+        commandId: job.commandId,
+        notes: job.notes,
+        error: job.error,
+        updatedAt: job.updatedAt,
+      })),
+      qaJobs: qaJobs.map((job) => ({
+        jobId: job._id,
+        status: job.status,
+        branchName: job.branchName,
+        sandboxId: job.sandboxId,
+        commandId: job.commandId,
+        previewDeploymentUrl: job.previewDeploymentUrl,
+        notes: job.notes,
+        error: job.error,
+        updatedAt: job.updatedAt,
+      })),
     }
   },
 })
@@ -483,6 +875,7 @@ export const createProject = mutation({
       status: "active",
       repoUrl: args.repoUrl?.trim() || null,
       vercelProjectId: null,
+      latestPreviewDeploymentUrl: null,
       starred: false,
       nextCardSeq: 1,
       nextIssueSeq: 1,
@@ -678,7 +1071,7 @@ export const createIssue = mutation({
     const now = Date.now()
     const cardKey = `${projectPrefix(project.slug)}-${project.nextCardSeq}`
     const issueNumber = project.nextIssueSeq
-    const agent = args.agent ?? "PM"
+    const agent = normalizeExecutionAgent(args.agent ?? null)
     const tags = normalizeTags(args.tags)
 
     await ctx.db.insert("projectCards", {
@@ -901,7 +1294,7 @@ export const completeBossPlanning = mutation({
         description: todo.description.trim(),
         acceptanceCriteria: normalizeAcceptanceCriteria(todo.acceptanceCriteria),
         issueNumber,
-        agent: todo.agent,
+        agent: normalizeExecutionAgent(todo.agent),
         priority: todo.priority,
         tags: normalizeTags(todo.labels),
         tone: "todo",
@@ -1213,6 +1606,7 @@ export const failProgrammerExecution = mutation({
     jobId: v.id("projectProgrammerJobs"),
     repoUrl: v.union(v.string(), v.null()),
     vercelProjectId: v.union(v.string(), v.null()),
+    keepInProgress: v.optional(v.boolean()),
     error: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1225,6 +1619,7 @@ export const failProgrammerExecution = mutation({
 
     const card = await getCardOrThrow(ctx, project._id, job.cardKey)
     const now = Date.now()
+    const keepInProgress = args.keepInProgress ?? false
 
     await ctx.db.patch(card._id, {
       tone: "todo",
@@ -1251,7 +1646,9 @@ export const failProgrammerExecution = mutation({
       ctx,
       project._id,
       "SYSTEM",
-      `Programmer could not finish ${card.cardKey}. The task is back in To Do.`,
+      keepInProgress
+        ? `Programmer could not finish ${card.cardKey}, but the workspace was kept alive and the task is back in To Do for a later retry.`
+        : `Programmer could not finish ${card.cardKey}. The task is back in To Do.`,
       now,
     )
 
@@ -1273,8 +1670,10 @@ export const claimQaExecution = mutation({
     }
 
     const card = await getCardOrThrow(ctx, project._id, cardKey)
-    if (card.tone !== "done") {
-      throw new Error("QA can only review tasks that are ready for review.")
+    const isQaTodo = card.agent === "QA" && card.tone === "todo"
+    const isReviewReady = card.tone === "done"
+    if (!isQaTodo && !isReviewReady) {
+      throw new Error("QA can only start explicit QA tasks or review tasks that are ready for review.")
     }
 
     const [activeJob] = await ctx.db
@@ -1289,22 +1688,26 @@ export const claimQaExecution = mutation({
       return null
     }
 
-    const [programmerJob] = await ctx.db
-      .query("projectProgrammerJobs")
-      .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
-        q
-          .eq("projectId", project._id)
-          .eq("cardKey", card.cardKey)
-          .eq("status", "completed"),
-      )
-      .order("desc")
-      .take(1)
+    const [programmerJob] = isReviewReady
+      ? await ctx.db
+          .query("projectProgrammerJobs")
+          .withIndex("by_projectId_and_cardKey_and_status_and_updatedAt", (q) =>
+            q
+              .eq("projectId", project._id)
+              .eq("cardKey", card.cardKey)
+              .eq("status", "completed"),
+          )
+          .order("desc")
+          .take(1)
+      : []
 
-    if (!programmerJob?.repoUrl || !programmerJob.branchName) {
-      throw new Error("No completed Programmer branch found for this task.")
+    const repoUrl = programmerJob?.repoUrl ?? project.repoUrl
+    const branchName = programmerJob?.branchName ?? "main"
+    if (!repoUrl || !branchName) {
+      throw new Error("No repository is linked to this project yet.")
     }
 
-    const vercelProjectId = programmerJob.vercelProjectId ?? project.vercelProjectId
+    const vercelProjectId = programmerJob?.vercelProjectId ?? project.vercelProjectId
     if (!vercelProjectId) {
       throw new Error("No Vercel project is linked to this task yet.")
     }
@@ -1319,17 +1722,25 @@ export const claimQaExecution = mutation({
       externalRunId: args.externalRunId,
       sandboxId: null,
       commandId: null,
-      repoUrl: programmerJob.repoUrl,
+      repoUrl,
       vercelProjectId,
-      branchName: programmerJob.branchName,
+      branchName,
       previewDeploymentUrl: null,
       notes: "QA is preparing integration checks.",
       error: null,
       updatedAt: now,
     })
 
+    if (isQaTodo) {
+      await ctx.db.patch(card._id, {
+        tone: "progress",
+        updatedAt: now,
+      })
+    }
+
     await ctx.db.patch(project._id, {
-      repoUrl: programmerJob.repoUrl,
+      ...projectCountPatch(card.tone, isQaTodo ? "progress" : card.tone, project),
+      repoUrl,
       vercelProjectId,
       updatedAt: now,
       lastActivityAt: now,
@@ -1351,8 +1762,9 @@ export const claimQaExecution = mutation({
         slug: project.slug,
         description: project.description,
         visibility: project.visibility,
-        repoUrl: programmerJob.repoUrl,
+        repoUrl,
         vercelProjectId,
+        latestPreviewDeploymentUrl: project.latestPreviewDeploymentUrl ?? null,
       },
       card: {
         cardKey: card.cardKey,
@@ -1362,7 +1774,7 @@ export const claimQaExecution = mutation({
         priority: card.priority,
         tags: card.tags,
       },
-      branchName: programmerJob.branchName,
+      branchName,
     }
   },
 })
@@ -1410,13 +1822,61 @@ export const completeQaExecution = mutation({
 
     const card = await getCardOrThrow(ctx, project._id, job.cardKey)
     const now = Date.now()
-    const nextCounts = projectCountPatch(card.tone, "merged", project)
     const previewDeploymentUrl = args.previewDeploymentUrl.trim()
+
+    let projectPatch = {
+      latestPreviewDeploymentUrl: previewDeploymentUrl,
+      updatedAt: now,
+      lastActivityAt: now,
+    } as Partial<Doc<"projects">>
+
+    const applyCountPatch = (from: BoardTone, to: BoardTone) => {
+      projectPatch = {
+        ...projectPatch,
+        ...projectCountPatch(from, to, {
+          ...project,
+          ...(projectPatch as Doc<"projects">),
+        }),
+      }
+    }
 
     await ctx.db.patch(card._id, {
       tone: "merged",
       updatedAt: now,
     })
+    applyCountPatch(card.tone, "merged")
+
+    const relatedEngCards =
+      card.agent === "QA"
+        ? await ctx.db
+            .query("projectCards")
+            .withIndex("by_projectId_and_updatedAt", (q) =>
+              q.eq("projectId", project._id),
+            )
+            .order("desc")
+            .take(200)
+            .then((cards) =>
+              cards.filter((candidate) => {
+                if (candidate.agent !== "ENG" || candidate.tone !== "done") {
+                  return false
+                }
+
+                if (card.tags.length === 0) {
+                  return false
+                }
+
+                return candidate.tags.some((tag) => card.tags.includes(tag))
+              }),
+            )
+        : []
+
+    for (const relatedCard of relatedEngCards) {
+      await ctx.db.patch(relatedCard._id, {
+        tone: "merged",
+        updatedAt: now,
+      })
+      applyCountPatch(relatedCard.tone, "merged")
+    }
 
     await ctx.db.patch(job._id, {
       status: "completed",
@@ -1427,16 +1887,16 @@ export const completeQaExecution = mutation({
     })
 
     await ctx.db.patch(project._id, {
-      ...nextCounts,
-      updatedAt: now,
-      lastActivityAt: now,
+      ...projectPatch,
     })
 
     await appendActivity(
       ctx,
       project._id,
       "QA",
-      `QA approved ${card.cardKey}. Preview is ready.`,
+      relatedEngCards.length > 0
+        ? `QA approved ${card.cardKey}. ${relatedEngCards.length} implementation task${relatedEngCards.length === 1 ? "" : "s"} also moved to Merged. Preview is ready.`
+        : `QA approved ${card.cardKey}. Preview is ready.`,
       now,
     )
 
@@ -1450,6 +1910,7 @@ export const failQaExecution = mutation({
     jobId: v.id("projectQaJobs"),
     error: v.string(),
     reassignToProgrammer: v.optional(v.boolean()),
+    keepInPlace: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { project } = await getOwnedProjectOrThrow(ctx, args.projectId)
@@ -1460,9 +1921,8 @@ export const failQaExecution = mutation({
     }
 
     const shouldReassign = Boolean(args.reassignToProgrammer)
-    const card = shouldReassign
-      ? await getCardOrThrow(ctx, project._id, job.cardKey)
-      : null
+    const keepInPlace = Boolean(args.keepInPlace)
+    const card = await getCardOrThrow(ctx, project._id, job.cardKey)
     const now = Date.now()
     await ctx.db.patch(job._id, {
       status: "failed",
@@ -1471,12 +1931,23 @@ export const failQaExecution = mutation({
       updatedAt: now,
     })
 
+    const shouldResetQaTodo =
+      !shouldReassign &&
+      card.agent === "QA" &&
+      card.tone === "progress"
     const nextCounts =
-      card !== null ? projectCountPatch(card.tone, "todo", project) : {}
+      shouldReassign || shouldResetQaTodo
+        ? projectCountPatch(card.tone, "todo", project)
+        : {}
 
-    if (card !== null) {
+    if (shouldReassign) {
       await ctx.db.patch(card._id, {
         agent: "ENG",
+        tone: "todo",
+        updatedAt: now,
+      })
+    } else if (shouldResetQaTodo) {
+      await ctx.db.patch(card._id, {
         tone: "todo",
         updatedAt: now,
       })
@@ -1494,6 +1965,8 @@ export const failQaExecution = mutation({
       "QA",
       shouldReassign
         ? `QA found issues in ${job.cardKey}. The task is back with Programmer.`
+        : keepInPlace
+          ? `QA paused ${job.cardKey}, kept the workspace alive, and moved the task back to To Do for a later retry.`
         : `QA found issues in ${job.cardKey}. The task is still waiting for review.`,
       now,
     )

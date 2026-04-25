@@ -12,6 +12,10 @@ type GitHubMergeCommit = {
   sha: string
 }
 
+type GitHubCompareResponse = {
+  status: "ahead" | "behind" | "diverged" | "identical"
+}
+
 type GitHubPullRequest = {
   number: number
   html_url: string
@@ -31,6 +35,20 @@ type MergeProjectBranchArgs = {
   title?: string
   body?: string
   commitMessage?: string
+}
+
+function normalizeGitHubMessage(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function isAlreadyMergedLikeMessage(value: string) {
+  const message = normalizeGitHubMessage(value)
+  return (
+    message.includes("already merged") ||
+    message.includes("nothing to merge") ||
+    message.includes("no commits between") ||
+    message.includes("base branch was modified")
+  )
 }
 
 function githubHeaders(token: string) {
@@ -195,6 +213,24 @@ export async function mergeProjectBranchIntoMain(args: MergeProjectBranchArgs) {
   const baseBranch = args.baseBranch ?? "main"
   const title = args.title ?? `Merge ${args.branchName} into ${baseBranch}`
 
+  const comparison = await githubJson<GitHubCompareResponse>(
+    `https://api.github.com/repos/${repoPath}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(args.branchName)}`,
+    {
+      method: "GET",
+      headers: githubHeaders(token),
+      cache: "no-store",
+    },
+  )
+
+  if (comparison.ok) {
+    if (
+      comparison.data.status === "identical" ||
+      comparison.data.status === "behind"
+    ) {
+      return { sha: "already-merged" }
+    }
+  }
+
   const pullRequest = await githubJson<GitHubPullRequest>(
     `https://api.github.com/repos/${repoPath}/pulls`,
     {
@@ -229,6 +265,10 @@ export async function mergeProjectBranchIntoMain(args: MergeProjectBranchArgs) {
       return merged.data
     }
 
+    if (isAlreadyMergedLikeMessage(merged.error)) {
+      return { sha: "already-merged" }
+    }
+
     throw new Error(
       `Unable to merge pull request #${pullRequest.data.number} into ${baseBranch}: ${merged.error}`,
     )
@@ -252,6 +292,13 @@ export async function mergeProjectBranchIntoMain(args: MergeProjectBranchArgs) {
 
   if (response.ok) {
     return response.data
+  }
+
+  if (
+    isAlreadyMergedLikeMessage(pullRequest.error) ||
+    isAlreadyMergedLikeMessage(response.error)
+  ) {
+    return { sha: "already-merged" }
   }
 
   throw new Error(
