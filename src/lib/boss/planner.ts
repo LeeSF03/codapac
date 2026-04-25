@@ -3,9 +3,9 @@
 import { generateText } from "ai"
 
 import {
-  getKimiLanguageModel,
-  getKimiTemperature,
-} from "@/lib/boss/kimi"
+  getGlmLanguageModel,
+  getGlmTemperature,
+} from "@/lib/boss/glm"
 import { bossPlanSchema, type BossPlan } from "@/lib/boss/schema"
 
 type PlanningProjectContext = {
@@ -33,7 +33,7 @@ function buildSystemPrompt() {
     '      "acceptanceCriteria": ["testable outcome"],',
     '      "labels": ["lowercase-kebab-case"],',
     '      "priority": "low|medium|high",',
-    '      "agent": "PM|ENG|QA"',
+    '      "agent": "ENG|QA"',
     "    }",
     "  ]",
     "}",
@@ -42,9 +42,9 @@ function buildSystemPrompt() {
     "- Focus on the first implementation wave only.",
     "- Prefer tasks that can be executed independently.",
     "- Make acceptanceCriteria concrete and testable.",
-    "- Use PM for scoping, UX, requirements, backlog, and integration planning.",
     "- Use ENG for build tasks.",
     "- Use QA for validation, regression, and release-readiness tasks.",
+    "- Do not create PM tasks. BOSS handles planning in chat instead of assigning work to itself.",
     "- labels must be lowercase kebab-case and short.",
     "- Do not mark missing setup details as blockers.",
     "- Do not ask the user for technical setup details unless they explicitly ask to provide them.",
@@ -74,8 +74,8 @@ export async function generateBossPlan(
   project: PlanningProjectContext,
 ): Promise<BossPlan> {
   const result = await generateText({
-    model: getKimiLanguageModel(),
-    temperature: getKimiTemperature(),
+    model: getGlmLanguageModel(),
+    temperature: getGlmTemperature(),
     maxOutputTokens: 4_000,
     messages: [
       {
@@ -91,12 +91,12 @@ export async function generateBossPlan(
 
   const content = result.text.trim()
   if (!content) {
-    throw new Error("Kimi did not return a JSON planning payload.")
+    throw new Error("GLM did not return a JSON planning payload.")
   }
 
   if (result.finishReason === "length") {
     throw new Error(
-      "Kimi returned a truncated planning payload. Increase max_tokens or shorten the brief.",
+      "GLM returned a truncated planning payload. Increase max_tokens or shorten the brief.",
     )
   }
 

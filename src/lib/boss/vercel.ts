@@ -16,6 +16,12 @@ type VercelError = {
   }
 }
 
+type VercelDeployment = {
+  uid?: string
+  id?: string
+  url?: string | null
+}
+
 type EnsureVercelProjectArgs = {
   name: string
   slug: string
@@ -76,6 +82,19 @@ function summarizeVercelError(payload: unknown) {
   return "Vercel returned an unexpected error."
 }
 
+function normalizeDeploymentUrl(deploymentUrl: string) {
+  const trimmed = deploymentUrl.trim()
+  if (!trimmed) {
+    throw new Error("Deployment URL is required.")
+  }
+
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`
+  const parsed = new URL(withProtocol)
+  return parsed.origin
+}
+
 async function vercelJson<T>(
   input: string,
   init: RequestInit,
@@ -92,6 +111,26 @@ async function vercelJson<T>(
   }
 
   return { ok: true, data: payload as T }
+}
+
+async function getDeploymentByUrl(token: string, teamId: string, deploymentUrl: string) {
+  const normalizedUrl = normalizeDeploymentUrl(deploymentUrl)
+  const hostname = new URL(normalizedUrl).hostname
+  const url = new URL(
+    `https://api.vercel.com/v13/deployments/${encodeURIComponent(hostname)}`,
+  )
+  url.searchParams.set("teamId", teamId)
+
+  const response = await vercelJson<VercelDeployment>(url.toString(), {
+    method: "GET",
+    headers: vercelHeaders(token),
+    cache: "no-store",
+  })
+
+  if (response.ok) return response.data
+  if (response.status === 404) return null
+
+  throw new Error(`Unable to read the Vercel deployment: ${response.error}`)
 }
 
 async function findVercelProject(token: string, teamId: string, name: string) {
@@ -270,5 +309,54 @@ export async function deleteVercelProject(projectId: string) {
   const payload = (await response.json().catch(() => null)) as unknown
   throw new Error(
     `Unable to delete the Vercel project: ${summarizeVercelError(payload)}`,
+  )
+}
+
+export async function deleteVercelDeploymentByUrl(deploymentUrl: string) {
+  const token = getVercelToken()
+  const teamId = getVercelTeamId()
+  const normalizedUrl = normalizeDeploymentUrl(deploymentUrl)
+  const directUrl = new URL("https://api.vercel.com/v13/deployments/by-url")
+  directUrl.searchParams.set("url", normalizedUrl)
+  directUrl.searchParams.set("teamId", teamId)
+
+  const directResponse = await fetch(directUrl.toString(), {
+    method: "DELETE",
+    headers: vercelHeaders(token),
+    cache: "no-store",
+  })
+
+  if (directResponse.ok || directResponse.status === 404) {
+    return
+  }
+
+  const deployment = await getDeploymentByUrl(token, teamId, normalizedUrl)
+  if (!deployment) {
+    return
+  }
+
+  const deploymentId = deployment.uid ?? deployment.id
+  if (!deploymentId) {
+    throw new Error("Unable to delete the Vercel deployment: missing deployment id.")
+  }
+
+  const fallbackUrl = new URL(
+    `https://api.vercel.com/v13/deployments/${encodeURIComponent(deploymentId)}`,
+  )
+  fallbackUrl.searchParams.set("teamId", teamId)
+
+  const fallbackResponse = await fetch(fallbackUrl.toString(), {
+    method: "DELETE",
+    headers: vercelHeaders(token),
+    cache: "no-store",
+  })
+
+  if (fallbackResponse.ok || fallbackResponse.status === 404) {
+    return
+  }
+
+  const payload = (await fallbackResponse.json().catch(() => null)) as unknown
+  throw new Error(
+    `Unable to delete the Vercel deployment: ${summarizeVercelError(payload)}`,
   )
 }

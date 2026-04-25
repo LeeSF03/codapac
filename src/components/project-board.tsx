@@ -107,6 +107,16 @@ function CardItem({
       <h4 className="mt-1.5 text-[13.5px] font-semibold leading-snug transition-colors group-hover:text-foreground">
         {card.title}
       </h4>
+      {card.latestFailure?.error ? (
+        <div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/5 px-2.5 py-2 text-[11px] leading-snug text-destructive">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-destructive/80">
+            {card.latestFailure.stage === "qa" ? "QA failure" : "Build failure"}
+          </div>
+          <p className="mt-1 text-[11px] leading-snug text-destructive/90">
+            {card.latestFailure.error}
+          </p>
+        </div>
+      ) : null}
       <div className="mt-2.5 flex items-center justify-between">
         <div className="flex flex-wrap gap-1">
           {card.tags.map((t) => (
@@ -681,7 +691,7 @@ export function ProjectBoard({
           </div>
 
           <form onSubmit={handleSprintSubmit} className="border-t border-border p-3">
-            <div className="flex items-end gap-2 rounded-xl border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
+            <div className="flex items-end gap-2 rounded-lg border border-input bg-card p-2 transition-shadow focus-within:ring-2 focus-within:ring-ring/30">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -708,13 +718,8 @@ export function ProjectBoard({
                 {chatBusy ? "..." : "Send"}
               </Button>
             </div>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-              {chatMode ? (
-                <>
-                  <span>⌘↵ to send · saved to this project</span>
-                  <span>Squad thread</span>
-                </>
-              ) : (
+            {!chatMode ? (
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                 <>
                   <div className="flex gap-3">
                     <button type="button" className="transition-colors hover:text-foreground">＠ mention</button>
@@ -733,8 +738,8 @@ export function ProjectBoard({
                     <span>⌘↵ to send · shared with Squad chat</span>
                   )}
                 </>
-              )}
-            </div>
+              </div>
+            ) : null}
           </form>
         </aside>
       </main>
