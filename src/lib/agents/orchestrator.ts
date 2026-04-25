@@ -99,15 +99,6 @@ async function choosePreferredStep(
     }
   }
 
-  const allReviewReady = states.every((state) => state.card.tone === "done")
-  if (allReviewReady) {
-    return {
-      kind: "qa",
-      cardKeys: states.map((state) => state.card.cardKey),
-      reason: "preferred_review_cards",
-    }
-  }
-
   return null
 }
 
@@ -127,15 +118,6 @@ function chooseNextWorkStep(nextWork: NextWorkSummary): WorkflowStep | null {
       kind: "qa",
       cardKeys: [nextQaTodoCard.cardKey],
       reason: "next_qa_todo",
-    }
-  }
-
-  const nextQaReviewCard = nextWork.qaReview[0]
-  if (nextQaReviewCard) {
-    return {
-      kind: "qa",
-      cardKeys: [nextQaReviewCard.cardKey],
-      reason: "next_review_ready_card",
     }
   }
 

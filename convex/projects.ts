@@ -604,9 +604,7 @@ export const getNextWork = query({
           return left.issueNumber - right.issueNumber
         })
         .map(toCardSummary),
-      qaReview: sortedCards
-        .filter((card) => card.tone === "done")
-        .map(toCardSummary),
+      qaReview: [],
     }
   },
 })
