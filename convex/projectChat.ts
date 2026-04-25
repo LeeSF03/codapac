@@ -2,16 +2,16 @@ import { v } from "convex/values"
 
 import type { Id } from "./_generated/dataModel"
 import {
-  mutation,
-  query,
   type MutationCtx,
   type QueryCtx,
+  mutation,
+  query,
 } from "./_generated/server"
 
 const chatRoleValidator = v.union(
   v.literal("user"),
   v.literal("assistant"),
-  v.literal("system"),
+  v.literal("system")
 )
 
 const chatAuthorValidator = v.union(
@@ -19,7 +19,7 @@ const chatAuthorValidator = v.union(
   v.literal("BOSS"),
   v.literal("PROGRAMMER"),
   v.literal("QA"),
-  v.literal("SYSTEM"),
+  v.literal("SYSTEM")
 )
 
 async function requireViewer(ctx: QueryCtx | MutationCtx) {
@@ -32,7 +32,7 @@ async function requireViewer(ctx: QueryCtx | MutationCtx) {
 
 async function getOwnedProjectOrThrow(
   ctx: QueryCtx | MutationCtx,
-  projectId: Id<"projects">,
+  projectId: Id<"projects">
 ) {
   const identity = await requireViewer(ctx)
   const project = await ctx.db.get(projectId)
@@ -59,7 +59,7 @@ export const listMessages = query({
     const messages = await ctx.db
       .query("projectChatMessages")
       .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", args.projectId),
+        q.eq("projectId", args.projectId)
       )
       .order("asc")
       .take(200)
@@ -86,18 +86,21 @@ export const listRecentForContext = query({
     const messages = await ctx.db
       .query("projectChatMessages")
       .withIndex("by_projectId_and_createdAt", (q) =>
-        q.eq("projectId", args.projectId),
+        q.eq("projectId", args.projectId)
       )
       .order("desc")
       .take(Math.max(1, Math.min(args.limit, 32)))
 
-    return messages.slice().reverse().map((message) => ({
-      id: message._id,
-      role: message.role,
-      author: message.author,
-      content: message.content,
-      createdAt: message.createdAt,
-    }))
+    return messages
+      .slice()
+      .reverse()
+      .map((message) => ({
+        id: message._id,
+        role: message.role,
+        author: message.author,
+        content: message.content,
+        createdAt: message.createdAt,
+      }))
   },
 })
 
@@ -123,7 +126,7 @@ export const getMessagesByIds = query({
           content: message.content,
           createdAt: message.createdAt,
         }
-      }),
+      })
     )
 
     return messages
@@ -151,7 +154,7 @@ export const getEmbeddingsByIds = query({
           id: embedding._id,
           messageId: embedding.messageId,
         }
-      }),
+      })
     )
 
     return embeddings.filter((embedding) => embedding !== null)
@@ -168,7 +171,7 @@ export const getProjectContext = query({
     const cards = await ctx.db
       .query("projectCards")
       .withIndex("by_projectId_and_updatedAt", (q) =>
-        q.eq("projectId", args.projectId),
+        q.eq("projectId", args.projectId)
       )
       .order("desc")
       .take(40)
@@ -203,7 +206,10 @@ export const saveMessage = mutation({
     embedding: v.array(v.number()),
   },
   handler: async (ctx, args) => {
-    const { identity, project } = await getOwnedProjectOrThrow(ctx, args.projectId)
+    const { identity, project } = await getOwnedProjectOrThrow(
+      ctx,
+      args.projectId
+    )
     const content = args.content.trim()
     if (!content) {
       throw new Error("Message content is required.")
