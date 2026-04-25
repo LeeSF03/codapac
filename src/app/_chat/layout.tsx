@@ -1,0 +1,14 @@
+import { redirect } from "next/navigation"
+
+import { isAuthenticated } from "@/lib/auth-server"
+
+export default async function ChatLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  if (!(await isAuthenticated())) {
+    redirect("/sign-in")
+  }
+  return <>{children}</>
+}
